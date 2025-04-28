@@ -1,0 +1,37 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Hex Visualization Layer
+
+Hex provides the visual layer and BI query tool for the data warehouse.
+
+## Connection
+
+- Hex connects to Databricks via JDBC/ODBC
+- Connection parameters are stored in Hex project settings
+- Queries execute against the star schema tables in Databricks
+
+## Components
+
+- **Data Sources**: Connections to the Databricks warehouse
+- **SQL Cells**: Direct SQL queries against the data warehouse
+- **Python Cells**: Custom transformations and advanced analytics
+- **Visualizations**: Charts, tables, and dashboards
+- **Apps**: Interactive data applications for end users
+
+## Development Workflow
+
+1. Create SQL queries that access the star schema
+2. Transform/prepare data using Python if needed
+3. Design visualizations
+4. Combine visuals into dashboards
+5. Share dashboards with stakeholders
+
+## Best Practices
+
+- Use parameterized queries for interactive filtering
+- Cache results when appropriate for performance
+- Implement row-level security through Hex's security features
+- Follow naming conventions for consistency

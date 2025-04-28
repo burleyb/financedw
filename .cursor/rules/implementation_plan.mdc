@@ -1,0 +1,324 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Finance Data Warehouse Implementation Plan
+
+This document outlines the detailed implementation approach for creating a star schema data warehouse from existing Databricks tables to support finance ad-hoc reporting.
+
+## 1. Domain Modeling & Schema Design
+
+### Analyze Source Data
+Begin by thoroughly analyzing the existing source data in Databricks:
+
+- Review key source tables in [data_definitions.sql](mdc:data_definitions.sql)
+- Classify all columns from `silver.deal.big_deal` and relevant bronze tables
+
+### Fact and Dimension Classification
+Classify all columns into appropriate categories:
+
+**Measures (Facts):**
+- Revenue metrics (vsc_rev, gap_rev, reserve, etc.)
+- Cost metrics (vsc_cost, gap_cost, etc.)
+- Transaction amounts (payment, amount_financed, etc.)
+- Commissions (setter_commission, closer_commission)
+- Performance metrics (days_to_payment, profit)
+
+**Dimensions:**
+- driver dimensions (driver_id, name, contact details)
+- Vehicle dimensions (make, model, year, VIN)
+- Employee dimensions (advisor, financial specialist, titling clerk)
+- Date/time dimensions (creation_date, completion_date)
+- Product dimensions (VSC, GAP, loan types)
+- Geographic dimensions (state, city, zip, county)
+- Deal status dimensions (deal_state, source)
+
+### Star Schema Design
+Design comprehensive star schema with these specific tables:
+
+**Fact Tables:**
+- `fact_deals` - Primary fact table with deal metrics
+- `fact_payments` - Payment transactions and statuses
+- `fact_payoffs` - Payoff transactions and details
+- `fact_commissions` - Employee commission tracking
+- `fact_driver_interactions` - Call and appointment metrics
+
+**Dimension Tables:**
+- `dim_driver` - Driver information
+- `dim_vehicle` - Vehicle details
+- `dim_employee` - Employee information from BambooHR
+- `dim_product` - Products like VSC, GAP
+- `dim_date` - Date dimension with fiscal periods
+- `dim_geography` - Location hierarchies
+- `dim_deal_status` - Deal status progression
+
+## 2. Build Delta Tables in Databricks
+
+### Dimension Table Implementation
+
+**Create Driver Dimension:**
+```sql
+CREATE OR REPLACE TABLE gold.dim_driver
+USING DELTA AS
+SELECT
+  CAST(customer_id AS INT) AS driver_key,
+  customer_id AS driver_id_source,
+  first_name,
+  middle_name,
+  last_name,
+  name_suffix,
+  email,
+  phone_number,
+  city,
+  state,
+  zip,
+  county,
+  -- Add additional attributes but exclude PII
+FROM silver.deal.big_deal
+GROUP BY customer_id, first_name, middle_name, last_name, name_suffix, email, phone_number, city, state, zip, county;
+```
+
+**Create Vehicle Dimension:**
+```sql
+CREATE OR REPLACE TABLE gold.dim_vehicle
+USING DELTA AS
+SELECT
+  CAST(ROW_NUMBER() OVER (ORDER BY vin) AS INT) AS vehicle_key,
+  vin,
+  make,
+  model,
+  model_year,
+  color,
+  vehicle_type,
+  fuel_type,
+  kbb_trim_name,
+  -- Additional vehicle attributes
+FROM silver.deal.big_deal
+GROUP BY vin, make, model, model_year, color, vehicle_type, fuel_type, kbb_trim_name;
+```
+
+**Create Date Dimension:**
+```sql
+CREATE OR REPLACE TABLE gold.dim_date
+USING DELTA AS
+SELECT
+  date_id AS date_key,
+  date_actual AS date,
+  day_of_week,
+  day_of_month,
+  day_of_year,
+  month_actual AS month,
+  month_name,
+  quarter_actual AS quarter,
+  year_actual AS year,
+  fiscal_month,
+  fiscal_quarter,
+  fiscal_year,
+  is_weekend,
+  is_holiday
+FROM (
+  SELECT SEQUENCE(
+    (SELECT MIN(creation_date_utc) FROM silver.deal.big_deal),
+    (SELECT MAX(completion_date_utc) FROM silver.deal.big_deal),
+    INTERVAL 1 DAY
+  ) AS date_sequence
+) LATERAL VIEW EXPLODE(date_sequence) AS date_id;
+```
+
+### Fact Table Implementation
+
+**Create Deal Facts:**
+```sql
+CREATE OR REPLACE TABLE gold.fact_deals
+USING DELTA AS
+SELECT
+  d.id AS deal_id,
+  c.driver_key,
+  v.vehicle_key,
+  e.employee_key,
+  dt_create.date_key AS creation_date_key,
+  dt_complete.date_key AS completion_date_key,
+  ds.deal_status_key,
+  p.product_key,
+  
+  -- Financial metrics
+  d.amount_financed,
+  d.payment,
+  d.money_down,
+  d.sell_rate,
+  d.buy_rate,
+  d.profit,
+  d.vsc_price,
+  d.vsc_cost,
+  d.gap_price,
+  d.gap_cost,
+  d.total_fee_amount,
+  d.reserve,
+  
+  -- Commission metrics
+  d.setter_commission,
+  d.closer_commission,
+  
+  -- Additional metrics
+  d.term,
+  d.days_to_payment
+  
+FROM silver.deal.big_deal d
+JOIN gold.dim_driver c ON d.customer_id = c.customer_id_source
+JOIN gold.dim_vehicle v ON d.vin = v.vin
+JOIN gold.dim_employee e ON d.processor = e.employee_id_source
+JOIN gold.dim_date dt_create ON DATE(d.creation_date_utc) = dt_create.date
+JOIN gold.dim_date dt_complete ON DATE(d.completion_date_utc) = dt_complete.date
+JOIN gold.dim_deal_status ds ON d.deal_state = ds.deal_state_source
+JOIN gold.dim_product p ON d.vsc_type = p.product_id_source;
+```
+
+### Automated Refresh Strategy
+
+Configure Databricks Jobs to refresh the data model:
+- Daily refresh for all dimension tables
+- Hourly refresh for transaction fact tables
+- Snapshot tables for historical analysis
+
+## 3. Register & Govern
+
+### Unity Catalog Configuration
+
+- Create a dedicated catalog called `finance_dw`
+- Set up appropriate schemas:
+  - `finance_dw.facts`
+  - `finance_dw.dimensions`
+  - `finance_dw.mart` (for pre-aggregated views)
+
+### Access Control
+
+- Grant read access to the Hex service principal
+- Set up finance team access groups 
+- Document PII handling protocols
+- Implement audit logging for sensitive data access
+
+## 4. Connect & Query in Hex
+
+### Hex Project Configuration
+
+- Create dedicated Hex project "Finance Analytics Dashboard"
+- Set up shared variables for common filters:
+  - Date ranges
+  - Product types
+  - Deal statuses
+  - Geographic regions
+
+### Key Finance Report Templates
+
+**Revenue Analysis:**
+```sql
+SELECT
+  d.year,
+  d.month,
+  p.product_type,
+  SUM(f.vsc_rev) AS vsc_revenue,
+  SUM(f.gap_rev) AS gap_revenue,
+  SUM(f.reserve) AS reserve_revenue,
+  SUM(f.profit) AS total_profit
+FROM finance_dw.facts.fact_deals f
+JOIN finance_dw.dimensions.dim_date d ON f.creation_date_key = d.date_key
+JOIN finance_dw.dimensions.dim_product p ON f.product_key = p.product_key
+WHERE d.date BETWEEN {{ start_date }} AND {{ end_date }}
+  AND p.product_type IN {{ product_types }}
+GROUP BY d.year, d.month, p.product_type
+ORDER BY d.year, d.month, p.product_type;
+```
+
+**Commission Analysis:**
+```sql
+SELECT
+  e.employee_name,
+  e.role,
+  d.year,
+  d.month,
+  COUNT(f.deal_id) AS deals_closed,
+  SUM(f.setter_commission) AS setter_commission,
+  SUM(f.closer_commission) AS closer_commission,
+  SUM(f.profit) AS profit_generated
+FROM finance_dw.facts.fact_deals f
+JOIN finance_dw.dimensions.dim_employee e ON f.employee_key = e.employee_key
+JOIN finance_dw.dimensions.dim_date d ON f.completion_date_key = d.date_key
+WHERE d.date BETWEEN {{ start_date }} AND {{ end_date }}
+  AND e.department = {{ department }}
+GROUP BY e.employee_name, e.role, d.year, d.month
+ORDER BY SUM(f.profit) DESC;
+```
+
+### Finance-Specific Visualizations
+
+Configure Hex visualizations tailored to finance needs:
+- Month-over-month revenue comparisons
+- Commission dashboards by employee role
+- Deal funnel analysis
+- Geographic performance heat maps
+- Product mix and profitability charts
+
+## 5. Iterate & Optimize
+
+### Performance Optimizations
+
+- Cluster fact tables on date_key and product_key
+- Z-ORDER large fact tables by frequently filtered dimensions
+- Build aggregate tables for common summary views:
+  ```sql
+  CREATE OR REPLACE TABLE finance_dw.mart.monthly_revenue_summary
+  USING DELTA
+  AS SELECT
+     d.year,
+     d.month,
+     p.product_type,
+     ds.deal_state, 
+     COUNT(*) AS deal_count,
+     SUM(f.profit) AS total_profit,
+     SUM(f.vsc_rev) AS total_vsc_revenue,
+     SUM(f.gap_rev) AS total_gap_revenue
+  FROM finance_dw.facts.fact_deals f
+  JOIN finance_dw.dimensions.dim_date d ON f.creation_date_key = d.date_key
+  JOIN finance_dw.dimensions.dim_product p ON f.product_key = p.product_key
+  JOIN finance_dw.dimensions.dim_deal_status ds ON f.deal_status_key = ds.deal_status_key
+  GROUP BY d.year, d.month, p.product_type, ds.deal_state;
+  ```
+
+### Incremental Updates
+
+Implement efficient incremental updates using Delta Lake merge operations:
+```sql
+MERGE INTO gold.fact_deals target
+USING new_deal_data source
+ON target.deal_id = source.deal_id
+WHEN MATCHED THEN
+  UPDATE SET *
+WHEN NOT MATCHED THEN
+  INSERT *
+```
+
+### Data Quality Monitoring
+
+- Set up data quality checks that verify:
+  - Completeness of dimension keys
+  - Accurate financial calculations
+  - Expected date ranges
+  - Referential integrity
+
+## 6. Business User Training
+
+- Develop training program for finance users
+- Create documentation with example queries
+- Record tutorial videos for common analysis tasks
+- Schedule regular office hours for support
+
+## Summary
+
+This implementation plan provides a comprehensive approach to:
+1. Design the star schema specifically for finance data analysis
+2. Build dimension and fact tables tailored to deal metrics
+3. Set up appropriate governance and access controls
+4. Configure Hex for finance-specific reporting needs
+5. Optimize performance for finance query patterns
+6. Train business users on self-service analytics

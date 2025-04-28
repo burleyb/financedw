@@ -1,0 +1,34 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Databricks Integration
+
+This project uses Databricks as the data processing engine and storage layer.
+
+## Data Storage
+
+- Source flat tables are stored in Databricks Delta Lake format
+- The star schema tables are also implemented as Delta tables
+- Delta Lake provides transaction support, schema enforcement, and time travel capabilities
+
+## Data Processing
+
+- Databricks notebooks are used for ETL processes
+- PySpark is the primary language for data transformation
+- SQL is used for data analysis and querying
+
+## Databricks Features
+
+- Delta Lake for ACID compliance
+- Databricks SQL for querying the warehouse
+- Jobs for scheduled ETL processes
+- Unity Catalog for data governance
+
+## Workspace Structure
+
+- ETL notebooks for data transformation
+- Schema definition notebooks
+- Data quality validation notebooks
+- Databricks SQL dashboards for internal monitoring

@@ -1,0 +1,33 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Project Structure
+
+This project is organized with the following directory structure to maintain clean separation of concerns.
+
+## Root Directories
+
+- `models/`: Contains the data model definitions and schema scripts
+- `hex/`: Contains Hex project exports and documentation
+- `tests/`: Contains data validation and quality tests
+- `docs/`: Project documentation
+
+## Models Structure
+
+- `models/dim/`: Dimension table schemas and definitions
+- `models/fact/`: Fact table schemas and definitions
+- `models/relationships/`: Relationship definitions between tables
+
+## Hex Structure
+
+- `hex/queries/`: SQL query templates for Hex
+- `hex/dashboards/`: Dashboard definitions and exports
+- `hex/apps/`: Interactive app definitions
+
+## Documentation Structure
+
+- `docs/architecture/`: System architecture documents
+- `docs/data-dictionary/`: Data dictionary and metadata
+- `docs/user-guides/`: End-user documentation

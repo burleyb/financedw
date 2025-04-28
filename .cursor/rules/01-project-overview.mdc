@@ -1,0 +1,20 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Finance Data Warehouse Project Overview
+
+This project creates a star schema data warehouse from pre-aggregated and cleansed flat tables in Databricks. The visualization and BI query layer is implemented using Hex.
+
+## Project Architecture
+
+1. **Source Data**: Aggregated and cleansed flat tables in Databricks
+2. **Data Warehouse Layer**: Star schema implementation with fact and dimension tables
+3. **Visualization Layer**: Hex dashboards and reports
+
+## Key Components
+
+- **ETL Processes**: Scripts that transform flat tables into star schema
+- **Data Models**: Definitions of fact and dimension tables
+- **Hex Integration**: Connection settings and dashboards for the BI layer

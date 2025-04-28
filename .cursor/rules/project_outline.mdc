@@ -1,0 +1,124 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Finance Data Warehouse Project Overview
+
+## Project Goal
+This project aims to create a star schema data warehouse from existing flat tables in Databricks to enable finance teams to perform ad-hoc reporting without developer intervention. The solution uses Hex as the visual layer and BI query tool for data analysis.
+
+## Data Architecture
+The project follows the medallion architecture in Databricks:
+
+- **Bronze Layer**: Raw data ingested from source systems (leaseend_db_public, bamboohr, etc.)
+- **Silver Layer**: Cleaned and transformed data (e.g., silver.deal.big_deal)
+- **Gold Layer**: Business-level aggregated data organized as a star schema with facts and dimensions
+
+## Star Schema Design
+The star schema will consist of:
+
+- **Fact Tables**: Contain measurable, quantitative data (metrics)
+  - Deal facts (sales, commissions, revenue)
+  - Finance facts (payments, payoffs)
+  - Customer interactions (calls, appointments)
+
+- **Dimension Tables**: Provide context to the facts
+  - Time dimension
+  - Customer dimension
+  - Vehicle dimension
+  - Employee dimension
+  - Geography dimension
+  - Product dimension (VSC, GAP)
+
+## Key Data Sources
+The primary data sources as defined in [data_definitions.sql](mdc:data_definitions.sql) include:
+
+1. **Lease End Application Data**
+   - Deals and financial information
+   - Customer data
+   - Vehicle information
+   - Payments and payoffs
+
+2. **HR Data** (from BambooHR)
+   - Employee information
+   - Commission structures
+
+3. **Financial Data**
+   - Transactions
+   - Revenue tracking
+
+4. **Marketing and Sales Data**
+   - Lead generation
+   - Customer acquisition
+
+## Implementation Plan
+1. Analyze existing bronze tables to identify entities and relationships
+2. Design star schema model with facts and dimensions
+3. Create transformation queries to populate the star schema
+4. Set up Hex dashboards and reports for business users
+5. Document the schema and provide training for finance teams
+
+## Benefits
+- Enable ad-hoc reporting without developer involvement
+- Connect data from multiple sources in a single reporting environment
+- Optimize query performance for analytical workloads
+- Provide standardized business metrics and KPIs
+- Support historical analysis and trend reporting
+
+## Hex Integration
+Hex will connect directly to Databricks to query the gold-level star schema, providing:
+- Interactive dashboards
+- Self-service report building
+- Data exploration capabilities
+- Scheduled report delivery
+
+## Data Entities
+
+This is just a preliminary list of data entities that exist in the organization.  Fill in what we are missing, we will need to model each relevant entity into Facts and Dimensions.
+
+- Lease End Application Data
+    - Deal
+        - VSC
+        - GAP
+        - Original Lease
+        - Loan - Check if we are keeping track of all applications or just the selected one
+            - Bank
+        - Driver - Mask PII, no social, no DOB, no personal address
+            - Credit Application -
+    - Vehicle
+        - Make
+        - Model
+        - OEM
+        - etc
+    - Title - Low Prio - dates
+    - Registration
+- HR Data
+    - Employee
+        - Advisors (setter) - Commissioned on credit app, get deal to credit app, pull credit applicant (cost not tied).
+        - Financial Specialists (Closer) - send apps to multiple banks then take best deal, upsell GAP and VSC, Title & Registration
+        - Structuring Manager - work with banks to get them a deal if they have lower credit
+        - Title Clerk -
+    - Commissions - Does everyone have the same commission rate, or is that configured per employee
+- NetSuite Data -
+    - Transaction
+    - 
+    - Account
+    - Transactions
+    - Vendors
+- Marketing
+    - Google Ads
+    - Facebook Ads
+    - Tater Taught
+    - Send Grid
+    - Rudderstack
+    - Phone Campaign
+- Sales
+    - Hubspot
+    - Kixie - Don't really care about this.
+    - Knox -
+    - NOTE:  DD - deal creation date is funding date.  Collect down payment from buyer, Signatures done, bank funded, then lien
+    - Netsuite recognizes deal date as the payoff date, the date the payoff to the lien holder happens, Jeremy wants to unify on the the deal date
+- Title & Registration
+    - No really good data, that process is handled in google sheets.
+    - But on completion there should be a finalized timestamp.

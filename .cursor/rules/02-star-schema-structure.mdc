@@ -1,0 +1,35 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Star Schema Data Warehouse Structure
+
+The data warehouse follows a star schema design with fact tables connected to multiple dimension tables.
+
+## Fact Tables
+
+Fact tables contain the business metrics, KPIs, and measurements with foreign keys to dimension tables.
+
+- Metrics are typically numeric values that can be aggregated
+- Each fact table row represents an event or transaction
+- Fact tables contain references (foreign keys) to dimension tables
+
+## Dimension Tables
+
+Dimension tables provide the context for the metrics in fact tables.
+
+- Contain descriptive attributes about business entities
+- Have a primary key that fact tables reference
+- Generally do not change frequently (slowly changing dimensions)
+
+## Common Dimensions
+
+- Time dimension (date, month, quarter, year)
+- Customer dimension
+- Product dimension
+- Location dimension
+
+## Implementation
+
+The star schema is implemented in Databricks, with tables stored as Delta tables for transactional consistency and performance.
