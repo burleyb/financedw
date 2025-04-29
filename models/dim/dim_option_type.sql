@@ -2,7 +2,7 @@
 -- Dimension table for deal option types (VSC, GAP, etc.)
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS gold.finance.dim_option_type (
+CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_option_type (
   option_type_key STRING NOT NULL, -- Natural key from source (e.g., option_type)
   option_type_description STRING, -- Descriptive name for the option type
   includes_vsc BOOLEAN, -- Flag indicating if VSC is included
@@ -18,7 +18,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO gold.finance.dim_option_type AS target
+MERGE INTO finance_gold.finance.dim_option_type AS target
 USING (
   -- Source query: Select distinct option types from source
   WITH source_options AS (
@@ -82,7 +82,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- Ensure 'Unknown' type exists for handling NULLs
-MERGE INTO gold.finance.dim_option_type AS target
+MERGE INTO finance_gold.finance.dim_option_type AS target
 USING (SELECT 'Unknown' as option_type_key, 'Unknown' as option_type_description, false as includes_vsc, false as includes_gap, 'static' as _source_table) AS source
 ON target.option_type_key = source.option_type_key
 WHEN NOT MATCHED THEN INSERT (option_type_key, option_type_description, includes_vsc, includes_gap, _source_table, _load_timestamp)

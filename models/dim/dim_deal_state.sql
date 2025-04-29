@@ -2,7 +2,7 @@
 -- Dimension table for deal state
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS gold.finance.dim_deal_state (
+CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_deal_state (
   deal_state_key STRING NOT NULL, -- Natural key from source (e.g., deal_state)
   deal_state_description STRING, -- Potentially more descriptive state (e.g., Funded, Cancelled)
   is_active_state BOOLEAN, -- Flag: Is the deal still actively being worked on towards a final outcome?
@@ -22,16 +22,16 @@ TBLPROPERTIES (
 -- ALTER TABLE gold.finance.dim_deal_state ADD CONSTRAINT dim_deal_state_source_unique UNIQUE (deal_state_source);
 
 -- 2. Merge incremental changes
-MERGE INTO gold.finance.dim_deal_state AS target
+MERGE INTO finance_gold.finance.dim_deal_state AS target
 USING (
   -- Source query: Select distinct deal states from source
   WITH source_states AS (
       SELECT DISTINCT deal_state FROM silver.deal.big_deal
   )
   SELECT
-    s.deal_state AS deal_state_key,
+    COALESCE(s.deal_state, 'unknown') AS deal_state_key,
     -- Derive description based on known states
-    CASE s.deal_state
+    CASE COALESCE(s.deal_state, 'unknown')
       WHEN 'waiting_for_title' THEN 'Waiting for Title'
       WHEN 'signed' THEN 'Signed'
       WHEN 'booted' THEN 'Booted' -- Assuming this means rejected/cancelled

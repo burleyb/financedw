@@ -2,7 +2,7 @@
 -- Dimension table for deal type
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS gold.finance.dim_deal_type (
+CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_deal_type (
   deal_type_key STRING NOT NULL, -- Natural key from source (e.g., type)
   deal_type_description STRING, -- Descriptive name for the deal type
   _source_table STRING, -- Metadata: Source table name
@@ -16,7 +16,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO gold.finance.dim_deal_type AS target
+MERGE INTO finance_gold.finance.dim_deal_type AS target
 USING (
   -- Source query: Select distinct deal types from source
   WITH source_types AS (
@@ -62,7 +62,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- Optionally, ensure 'Unknown' type exists for handling NULLs during joins
-MERGE INTO gold.finance.dim_deal_type AS target
+MERGE INTO finance_gold.finance.dim_deal_type AS target
 USING (SELECT 'Unknown' as deal_type_key, 'Unknown' as deal_type_description, 'static' as _source_table) AS source
 ON target.deal_type_key = source.deal_type_key
 WHEN NOT MATCHED THEN INSERT (deal_type_key, deal_type_description, _source_table, _load_timestamp)

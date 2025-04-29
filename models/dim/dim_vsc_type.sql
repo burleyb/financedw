@@ -2,7 +2,7 @@
 -- Dimension table for VSC (Vehicle Service Contract) types
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS gold.finance.dim_vsc_type (
+CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_vsc_type (
   vsc_type_key STRING NOT NULL, -- Natural key from source (e.g., vsc_type)
   vsc_type_description STRING, -- Descriptive name for the VSC type
   _source_table STRING, -- Metadata: Source table name
@@ -16,7 +16,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO gold.finance.dim_vsc_type AS target
+MERGE INTO finance_gold.finance.dim_vsc_type AS target
 USING (
   -- Source query: Select distinct VSC types from source
   WITH source_types AS (
@@ -28,7 +28,12 @@ USING (
     s.vsc_type AS vsc_type_key,
     -- Assuming the type itself is descriptive enough, just use it
     -- Add specific CASE statement here if more descriptive names are needed
-    s.vsc_type AS vsc_type_description,
+    CASE
+      WHEN s.vsc_type = 'VALUE' THEN 'Value'
+      WHEN s.vsc_type = 'BASIC' THEN 'Basic'
+      WHEN s.vsc_type = 'MAJOR' THEN 'Major'
+      ELSE COALESCE(s.vsc_type, 'Unknown') -- Handle potential future options
+    END AS vsc_type_description,
     'silver.deal.big_deal' as _source_table,
     CURRENT_TIMESTAMP() as _load_timestamp
   FROM source_types s
@@ -60,7 +65,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- Ensure 'Unknown' type exists for handling NULLs or empty strings
-MERGE INTO gold.finance.dim_vsc_type AS target
+MERGE INTO finance_gold.finance.dim_vsc_type AS target
 USING (SELECT 'Unknown' as vsc_type_key, 'Unknown' as vsc_type_description, 'static' as _source_table) AS source
 ON target.vsc_type_key = source.vsc_type_key
 WHEN NOT MATCHED THEN INSERT (vsc_type_key, vsc_type_description, _source_table, _load_timestamp)

@@ -111,6 +111,42 @@ MAJOR
 ```
 
 
+-processor
+
+```jsx
+VITU
+DLRdmv
+The Title Girl
+ATC
+WKLS
+State DMV
+Other (leave note)
+Plateman
+DLR50
+<NULL>
+```
+
+
+-tax_processor
+
+```jsx
+Atc
+Vitu
+<NULL>
+```
+
+-fee_processor
+
+```jsx
+Atc
+Vitu
+<NULL>
+```
+
+
+
+
+
 
 -big_deal
 

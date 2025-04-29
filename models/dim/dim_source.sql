@@ -2,7 +2,7 @@
 -- Dimension table for deal sources
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS gold.finance.dim_source (
+CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_source (
   source_key STRING NOT NULL, -- Natural key from source (e.g., source column)
   source_description STRING, -- Descriptive name for the source
   source_name_detail STRING, -- Detailed source name if available (from source_name)
@@ -18,7 +18,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO gold.finance.dim_source AS target
+MERGE INTO finance_gold.finance.dim_source AS target
 USING (
   -- Source query: Select distinct source combinations from source
   WITH source_combinations AS (
@@ -80,7 +80,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- Ensure 'Unknown' source exists for handling NULLs
-MERGE INTO gold.finance.dim_source AS target
+MERGE INTO finance_gold.finance.dim_source AS target
 USING (SELECT 'Unknown' as source_key, 'Unknown' as source_description, NULL as source_name_detail, NULL as other_source_detail, 'static' as _source_table) AS source
 ON target.source_key = source.source_key
 WHEN NOT MATCHED THEN INSERT (source_key, source_description, source_name_detail, other_source_detail, _source_table, _load_timestamp)

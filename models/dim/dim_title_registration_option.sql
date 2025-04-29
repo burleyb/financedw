@@ -2,7 +2,7 @@
 -- Dimension table for title and registration options
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS gold.finance.dim_title_registration_option (
+CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_title_registration_option (
   title_registration_option_key STRING NOT NULL, -- Natural key from source (e.g., title_registration_option)
   title_registration_option_description STRING, -- Descriptive name for the option
   _source_table STRING, -- Metadata: Source table name
@@ -16,7 +16,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO gold.finance.dim_title_registration_option AS target
+MERGE INTO finance_gold.finance.dim_title_registration_option AS target
 USING (
   -- Source query: Select distinct options from source
   WITH source_options AS (
@@ -64,7 +64,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- Ensure 'Unknown' option exists for handling NULLs
-MERGE INTO gold.finance.dim_title_registration_option AS target
+MERGE INTO finance_gold.finance.dim_title_registration_option AS target
 USING (SELECT 'Unknown' as title_registration_option_key, 'Unknown' as title_registration_option_description, 'static' as _source_table) AS source
 ON target.title_registration_option_key = source.title_registration_option_key
 WHEN NOT MATCHED THEN INSERT (title_registration_option_key, title_registration_option_description, _source_table, _load_timestamp)
