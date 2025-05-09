@@ -6,10 +6,10 @@
 -- * You have permissions to create catalogs and schemas.
 -- * Unity Catalog is enabled for your workspace.
 
-CREATE CATALOG IF NOT EXISTS finance_gold
-COMMENT 'Temp Gold Catalog for the Finance Data Warehouse until ready to move to gold.';
+-- CREATE CATALOG IF NOT EXISTS finance_gold
+-- COMMENT 'Temp Gold Catalog for the Finance Data Warehouse until ready to move to gold.';
 
-USE CATALOG finance_gold;
+USE CATALOG gold;
 
 CREATE SCHEMA IF NOT EXISTS finance
 COMMENT 'Schema for finance dimension and fact tables (e.g., fact_deals, dim_driver, dim_vehicle) for the finance data warehouse.';

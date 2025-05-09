@@ -2,7 +2,7 @@
 -- Fact table for deal payoffs
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS finance_gold.finance.fact_deal_payoff (
+CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_payoff (
   -- Keys
   deal_key STRING NOT NULL, -- FK to dim_deal
   lienholder_key STRING, -- FK to dim_lienholder
@@ -30,7 +30,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO finance_gold.finance.fact_deal_payoff AS target
+MERGE INTO gold.finance.fact_deal_payoff AS target
 USING (
   SELECT
     d.id AS deal_key,
@@ -40,11 +40,11 @@ USING (
     CAST(DATE_FORMAT(COALESCE(d.completion_date_utc, d.creation_date_utc), 'HHmmss') AS INT) AS payoff_time_key,
     CAST(DATE_FORMAT(d.good_through_date, 'yyyyMMdd') AS INT) AS payoff_good_through_date_key,
 
-    -- Measures (multiply by 100 and cast to BIGINT)
-    CAST(d.vehicle_payoff * 100 AS BIGINT) AS vehicle_payoff_amount,
-    CAST(d.estimated_payoff * 100 AS BIGINT) AS estimated_payoff_amount,
-    CAST(d.user_entered_total_payoff * 100 AS BIGINT) AS user_entered_total_payoff_amount,
-    CAST(d.vehicle_cost * 100 AS BIGINT) AS vehicle_cost_amount,
+    -- Measures (multiply by 100 and cast to BIGINT, use COALESCE to default nulls to zero)
+    CAST(COALESCE(d.vehicle_payoff, 0) * 100 AS BIGINT) AS vehicle_payoff_amount,
+    CAST(COALESCE(d.estimated_payoff, 0) * 100 AS BIGINT) AS estimated_payoff_amount,
+    CAST(COALESCE(d.user_entered_total_payoff, 0) * 100 AS BIGINT) AS user_entered_total_payoff_amount,
+    CAST(COALESCE(d.vehicle_cost, 0) * 100 AS BIGINT) AS vehicle_cost_amount,
 
     'silver.deal.big_deal' as _source_table,
     CURRENT_TIMESTAMP() as _load_timestamp

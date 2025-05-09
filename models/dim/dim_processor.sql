@@ -2,7 +2,7 @@
 -- Dimension table for deal processors (can be systems, teams, or statuses)
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_processor (
+CREATE TABLE IF NOT EXISTS gold.finance.dim_processor (
   processor_key STRING NOT NULL,      -- Natural key from source (processor, tax_processor, fee_processor), stored in UPPERCASE
   processor_description STRING,     -- Description derived from key
   -- Add other relevant attributes if known (e.g., processor_type)
@@ -16,7 +16,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge distinct processor values with descriptions
-MERGE INTO finance_gold.finance.dim_processor AS target
+MERGE INTO gold.finance.dim_processor AS target
 USING (
   SELECT
     processor_val_upper AS processor_key,
@@ -61,7 +61,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- 3. Add 'Unknown' Processor for referential integrity
-MERGE INTO finance_gold.finance.dim_processor AS target
+MERGE INTO gold.finance.dim_processor AS target
 USING (
   SELECT
     'UNKNOWN' as processor_key, -- Use UPPERCASE for consistency

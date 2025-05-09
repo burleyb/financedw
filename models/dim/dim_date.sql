@@ -13,8 +13,8 @@
 
 -- For simplicity in this example, let's use fixed dates.
 -- Replace with dynamic dates using SET VAR above or pass as parameters.
-SET VAR start_date = '1920-01-01';
-SET VAR end_date = '2050-12-31';
+-- SET VAR start_date = '1920-01-01';
+-- SET VAR end_date = '2050-12-31';
 
 CREATE OR REPLACE TABLE gold.finance.dim_date
 USING DELTA
@@ -22,7 +22,7 @@ COMMENT 'Dimension table storing date attributes for analysis.'
 AS
 WITH date_sequence AS (
   -- Generate a sequence of dates within the desired range
-  SELECT EXPLODE(SEQUENCE(CAST(${start_date} AS DATE), CAST(${end_date} AS DATE), INTERVAL 1 DAY)) AS date_actual
+  SELECT EXPLODE(SEQUENCE(CAST('1920-01-01' AS DATE), CAST('2050-12-31' AS DATE), INTERVAL 1 DAY)) AS date_actual
 )
 SELECT
   CAST(DATE_FORMAT(ds.date_actual, 'yyyyMMdd') AS INT) AS date_key, -- Surrogate key (e.g., 20230115)

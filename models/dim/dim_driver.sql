@@ -2,7 +2,7 @@
 -- Dimension table for drivers
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_driver (
+CREATE TABLE IF NOT EXISTS gold.finance.dim_driver (
   driver_key STRING NOT NULL, -- Natural key (source system customer_id)
   first_name STRING,
   middle_name STRING,
@@ -26,7 +26,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Implement MERGE logic for incremental updates (SCD Type 1)
-MERGE INTO finance_gold.finance.dim_driver AS target
+MERGE INTO gold.finance.dim_driver AS target
 USING (
   -- Source query: Select latest distinct driver data from source
   SELECT

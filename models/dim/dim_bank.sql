@@ -2,7 +2,7 @@
 -- Dimension table for banks sourced from bronze.leaseend_db_public.banks
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_bank (
+CREATE TABLE IF NOT EXISTS gold.finance.dim_bank (
   bank_key STRING NOT NULL, -- Natural key from source (bronze.leaseend_db_public.banks.name)
   bank_name STRING, -- Name from source (bronze.leaseend_db_public.banks.name)
   bank_display_name STRING, -- Display name from source (bronze.leaseend_db_public.banks.display_name)
@@ -31,7 +31,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes from bronze.leaseend_db_public.banks
-MERGE INTO finance_gold.finance.dim_bank AS target
+MERGE INTO gold.finance.dim_bank AS target
 USING (
   -- Select relevant columns from the source bank table
   SELECT
@@ -113,7 +113,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- 3. Ensure 'Unknown' bank exists for referential integrity
-MERGE INTO finance_gold.finance.dim_bank AS target
+MERGE INTO gold.finance.dim_bank AS target
 USING (
   SELECT
     'Unknown' as bank_key,

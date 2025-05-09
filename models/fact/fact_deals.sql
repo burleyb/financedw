@@ -3,13 +3,14 @@
 -- Ensures the primary deals fact table exists and incrementally updates it.
 
 -- 1. Create the table if it doesn't exist
-CREATE TABLE IF NOT EXISTS finance_gold.finance.fact_deals (
+CREATE TABLE IF NOT EXISTS gold.finance.fact_deals (
   -- Keys
   deal_key STRING NOT NULL, -- FK to dim_deal
+  deal_state_key STRING,
   driver_key STRING, -- FK to dim_driver
   vehicle_key STRING, -- FK to dim_vehicle
   bank_key STRING, -- FK to dim_bank
-  product_key STRING, -- FK to dim_product
+  option_type_key STRING, -- FK to dim_option_type
   creation_date_key INT, -- FK to dim_date
   creation_time_key INT, -- FK to dim_time
   completion_date_key INT, -- FK to dim_date
@@ -52,44 +53,45 @@ PARTITIONED BY (creation_date_key) -- Partitioning by date key is common for fac
 TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true', 'delta.autoOptimize.autoCompact' = 'true');
 
 -- 2. Merge incremental changes
-MERGE INTO finance_gold.finance.fact_deals AS target
+MERGE INTO gold.finance.fact_deals AS target
 USING (
   -- Select the latest deal data and join with dimensions to get foreign keys
   SELECT
     d.id AS deal_key,
+    COALESCE(CAST(d.deal_state AS STRING), 'Unknown') AS deal_state_key,
     COALESCE(CAST(d.customer_id AS STRING), 'Unknown') AS driver_key, -- Adjust FK lookup if needed
 	  COALESCE(CAST(d.vin AS STRING), 'Unknown') AS vehicle_key, -- Adjust FK lookup if needed
     COALESCE(CAST(d.bank AS STRING), 'Unknown') AS bank_key,
-    -- Derive product_key based on logic in dim_product
-    CONCAT(COALESCE(CAST(d.vsc_type AS STRING), 'N/A'), '|', CAST(CASE WHEN d.option_type IN ('vscPlusGap', 'gap') THEN true ELSE false END AS STRING)) as product_key,
+    -- Derive option_type_key based on logic in dim_option_type
+    CONCAT(COALESCE(CAST(d.vsc_type AS STRING), 'N/A'), '|', CAST(CASE WHEN d.option_type IN ('vscPlusGap', 'gap') THEN true ELSE false END AS STRING)) as option_type_key,
 	  CAST(DATE_FORMAT(d.creation_date_utc, 'yyyyMMdd') AS INT) AS creation_date_key,
 	  CAST(DATE_FORMAT(d.creation_date_utc, 'HHmmss') AS INT) AS creation_time_key,
     CAST(DATE_FORMAT(d.completion_date_utc, 'yyyyMMdd') AS INT) AS completion_date_key,
 	  CAST(DATE_FORMAT(d.completion_date_utc, 'HHmmss') AS INT) AS completion_time_key,
 
-    -- Measures (multiply currency by 100, rates by 100, cast to BIGINT)
-    CAST(d.amount_financed * 100 AS BIGINT) as amount_financed_amount,
-    CAST(d.payment * 100 AS BIGINT) as payment_amount,
-    CAST(d.money_down * 100 AS BIGINT) as money_down_amount,
-    CAST(d.sell_rate * 100 AS BIGINT) as sell_rate_amount,
-    CAST(d.buy_rate * 100 AS BIGINT) as buy_rate_amount,
-    CAST(d.profit * 100 AS BIGINT) as profit_amount,
-    CAST(d.vsc_price * 100 AS BIGINT) as vsc_price_amount,
-    CAST(d.vsc_cost * 100 AS BIGINT) as vsc_cost_amount,
-    CAST(d.vsc_rev * 100 AS BIGINT) as vsc_rev_amount,
-    CAST(d.gap_price * 100 AS BIGINT) as gap_price_amount,
-    CAST(d.gap_cost * 100 AS BIGINT) as gap_cost_amount,
-    CAST(d.gap_rev * 100 AS BIGINT) as gap_rev_amount,
-    CAST(d.total_fee_amount * 100 AS BIGINT) as total_fee_amount,
-    CAST(d.doc_fee * 100 AS BIGINT) as doc_fee_amount,
-    CAST(d.bank_fees * 100 AS BIGINT) as bank_fees_amount,
-    CAST(d.registration_transfer_fee * 100 AS BIGINT) as registration_transfer_fee_amount,
-    CAST(d.title_fee * 100 AS BIGINT) as title_fee_amount,
-    CAST(d.new_registration_fee * 100 AS BIGINT) as new_registration_fee_amount,
-    CAST(d.reserve * 100 AS BIGINT) as reserve_amount,
-    CAST(d.base_tax_amount * 100 AS BIGINT) as base_tax_amount,
-    CAST(d.warranty_tax_amount * 100 AS BIGINT) as warranty_tax_amount,
-    CAST(d.rpt * 100 AS BIGINT) as rpt_amount,
+    -- Measures (multiply currency by 100, rates by 100, cast to BIGINT, use COALESCE to default nulls to zero)
+    CAST(COALESCE(d.amount_financed, 0) * 100 AS BIGINT) as amount_financed_amount,
+    CAST(COALESCE(d.payment, 0) * 100 AS BIGINT) as payment_amount,
+    CAST(COALESCE(d.money_down, 0) * 100 AS BIGINT) as money_down_amount,
+    CAST(COALESCE(d.sell_rate, 0) * 100 AS BIGINT) as sell_rate_amount,
+    CAST(COALESCE(d.buy_rate, 0) * 100 AS BIGINT) as buy_rate_amount,
+    CAST(COALESCE(d.profit, 0) * 100 AS BIGINT) as profit_amount,
+    CAST(COALESCE(d.vsc_price, 0) * 100 AS BIGINT) as vsc_price_amount,
+    CAST(COALESCE(d.vsc_cost, 0) * 100 AS BIGINT) as vsc_cost_amount,
+    CAST(COALESCE(d.vsc_rev, 0) * 100 AS BIGINT) as vsc_rev_amount,
+    CAST(COALESCE(d.gap_price, 0) * 100 AS BIGINT) as gap_price_amount,
+    CAST(COALESCE(d.gap_cost, 0) * 100 AS BIGINT) as gap_cost_amount,
+    CAST(COALESCE(d.gap_rev, 0) * 100 AS BIGINT) as gap_rev_amount,
+    CAST(COALESCE(d.total_fee_amount, 0) * 100 AS BIGINT) as total_fee_amount,
+    CAST(COALESCE(d.doc_fee, 0) * 100 AS BIGINT) as doc_fee_amount,
+    CAST(COALESCE(d.bank_fees, 0) * 100 AS BIGINT) as bank_fees_amount,
+    CAST(COALESCE(d.registration_transfer_fee, 0) * 100 AS BIGINT) as registration_transfer_fee_amount,
+    CAST(COALESCE(d.title_fee, 0) * 100 AS BIGINT) as title_fee_amount,
+    CAST(COALESCE(d.new_registration_fee, 0) * 100 AS BIGINT) as new_registration_fee_amount,
+    CAST(COALESCE(d.reserve, 0) * 100 AS BIGINT) as reserve_amount,
+    CAST(COALESCE(d.base_tax_amount, 0) * 100 AS BIGINT) as base_tax_amount,
+    CAST(COALESCE(d.warranty_tax_amount, 0) * 100 AS BIGINT) as warranty_tax_amount,
+    CAST(COALESCE(d.rpt, 0) * 100 AS BIGINT) as rpt_amount,
 
     CAST(d.term AS INT) as term,
     CAST(d.days_to_payment AS INT) as days_to_payment,
@@ -112,9 +114,10 @@ ON target.deal_key = source.deal_key
 WHEN MATCHED THEN
   UPDATE SET
     target.driver_key = source.driver_key,
+    target.deal_state_key = source.deal_state_key,
     target.vehicle_key = source.vehicle_key,
     target.bank_key = source.bank_key,
-    target.product_key = source.product_key,
+    target.option_type_key = source.option_type_key,
     target.creation_date_key = source.creation_date_key,
     target.creation_time_key = source.creation_time_key,
     target.completion_date_key = source.completion_date_key,
@@ -150,10 +153,11 @@ WHEN MATCHED THEN
 WHEN NOT MATCHED THEN
   INSERT (
     deal_key,
+    deal_state_key,
     driver_key,
     vehicle_key,
     bank_key,
-    product_key,
+    option_type_key,
     creation_date_key,
     creation_time_key,
     completion_date_key,
@@ -187,10 +191,11 @@ WHEN NOT MATCHED THEN
   )
   VALUES (
     source.deal_key,
+    source.deal_state_key,
     source.driver_key,
     source.vehicle_key,
     source.bank_key,
-    source.product_key,
+    source.option_type_key,
     source.creation_date_key,
     source.creation_time_key,
     source.completion_date_key,

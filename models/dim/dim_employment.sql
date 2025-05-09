@@ -3,7 +3,7 @@
 -- Sourced from bronze.leaseend_db_public.employments
 
 -- 1. Define Table Structure with History Tracking
-CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_employment (
+CREATE TABLE IF NOT EXISTS gold.finance.dim_employment (
   employment_key INT NOT NULL, -- Natural key from source table (employments.id)
   driver_key STRING NOT NULL, -- Natural key from dim_driver (customer_id from source)
   employer STRING,
@@ -40,13 +40,13 @@ CREATE OR REPLACE TEMPORARY VIEW latest_source_data_temp_view AS
 SELECT
   id AS employment_key, -- Use source id as the key
   CAST(customer_id AS STRING) AS driver_key,
-  name AS employer,
-  job_title,
-  employment_type,
-  phone_number AS work_phone_number,
-  years_at_job,
-  months_at_job,
-  gross_income,
+  COALESCE(name, 'Unknown') AS employer,
+  COALESCE(job_title, 'Unknown') AS job_title,
+  COALESCE(employment_type, 'Unknown') AS employment_type,
+  COALESCE(phone_number, 'Unknown') AS work_phone_number,
+  COALESCE(years_at_job, 0) AS years_at_job,
+  COALESCE(months_at_job, 0) AS months_at_job,
+  COALESCE(gross_income, 0) AS gross_income,
   pay_frequency,
   status AS employment_status,
   updated_at -- Used for ordering within the same employment_key if needed, though likely unique
@@ -82,7 +82,7 @@ WHERE
 
 -- Step 3: Expire old records where changes are detected.
 -- Use the 'changes_temp_view' to find employment records needing expiration.
-MERGE INTO finance_gold.finance.dim_employment AS target
+MERGE INTO gold.finance.dim_employment AS target
 USING changes_temp_view AS source
 ON target.employment_key = source.employment_key AND target._is_current = TRUE -- Match on employment_key
 WHEN MATCHED THEN -- A change was detected for this employment_key, expire the existing current record
@@ -91,7 +91,7 @@ WHEN MATCHED THEN -- A change was detected for this employment_key, expire the e
     target._effective_to_timestamp = CURRENT_TIMESTAMP();
 
 -- Step 4: Insert the new or updated records identified in the 'changes_temp_view'.
-INSERT INTO finance_gold.finance.dim_employment (
+INSERT INTO gold.finance.dim_employment (
     employment_key, -- Natural key from source
     driver_key,
     employer,

@@ -2,7 +2,7 @@
 -- Fact table for NetSuite related deal aggregates
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS finance_gold.finance.fact_deal_netsuite (
+CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
   -- Keys
   deal_key STRING NOT NULL, -- FK to dim_deal
   netsuite_posting_date_key INT, -- FK to dim_date (based on ns_date or similar)
@@ -61,51 +61,51 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO finance_gold.finance.fact_deal_netsuite AS target
+MERGE INTO gold.finance.fact_deal_netsuite AS target
 USING (
   SELECT
     d.id AS deal_key,
     CAST(DATE_FORMAT(d.ns_date, 'yyyyMMdd') AS INT) AS netsuite_posting_date_key,
     CAST(DATE_FORMAT(d.ns_date, 'HHmmss') AS INT) AS netsuite_posting_time_key,
 
-    -- Measures (multiply currency by 100, percentages by 10000)
-    CAST(d.`4105_rev_reserve` * 100 AS BIGINT) as rev_reserve_4105,
-    CAST(d.reserve_bonus_rev_4106 * 100 AS BIGINT) as reserve_bonus_rev_4106,
-    CAST(d.reserve_chargeback_rev_4107 * 100 AS BIGINT) as reserve_chargeback_rev_4107,
-    CAST(d.vsc_rev_4110 * 100 AS BIGINT) as vsc_rev_4110,
-    CAST(d.vsc_advance_rev_4110a * 100 AS BIGINT) as vsc_advance_rev_4110a,
-    CAST(d.vsc_volume_bonus_rev_4110b * 100 AS BIGINT) as vsc_volume_bonus_rev_4110b,
-    CAST(d.vsc_cost_rev_4110c * 100 AS BIGINT) as vsc_cost_rev_4110c,
-    CAST(d.vsc_chargeback_rev_4111 * 100 AS BIGINT) as vsc_chargeback_rev_4111,
-    CAST(d.gap_rev_4120 * 100 AS BIGINT) as gap_rev_4120,
-    CAST(d.gap_advance_rev_4120a * 100 AS BIGINT) as gap_advance_rev_4120a,
-    CAST(d.gap_volume_bonus_rev_4120b * 100 AS BIGINT) as gap_volume_bonus_rev_4120b,
-    CAST(d.gap_cost_rev_4120c * 100 AS BIGINT) as gap_cost_rev_4120c,
-    CAST(d.gap_chargeback_rev_4121 * 100 AS BIGINT) as gap_chargeback_rev_4121,
-    CAST(d.doc_fees_rev_4130 * 100 AS BIGINT) as doc_fees_rev_4130,
-    CAST(d.doc_fees_chargeback_rev_4130c * 100 AS BIGINT) as doc_fees_chargeback_rev_4130c,
-    CAST(d.titling_fees_rev_4141 * 100 AS BIGINT) as titling_fees_rev_4141,
-    CAST(d.funding_clerks_5301 * 100 AS BIGINT) as funding_clerks_5301,
-    CAST(d.commission_5302 * 100 AS BIGINT) as commission_5302,
-    CAST(d.sales_guarantee_5303 * 100 AS BIGINT) as sales_guarantee_5303,
-    CAST(d.ic_payoff_team_5304 * 100 AS BIGINT) as ic_payoff_team_5304,
-    CAST(d.outbound_commission_5305 * 100 AS BIGINT) as outbound_commission_5305,
-    CAST(d.title_clerks_5320 * 100 AS BIGINT) as title_clerks_5320,
-    CAST(d.direct_emp_benefits_5330 * 100 AS BIGINT) as direct_emp_benefits_5330,
-    CAST(d.direct_payroll_tax_5340 * 100 AS BIGINT) as direct_payroll_tax_5340,
-    CAST(d.payoff_variance_5400 * 100 AS BIGINT) as payoff_variance_5400,
-    CAST(d.sales_tax_variance_5401 * 100 AS BIGINT) as sales_tax_variance_5401,
-    CAST(d.registration_variance_5402 * 100 AS BIGINT) as registration_variance_5402,
-    CAST(d.customer_experience_5403 * 100 AS BIGINT) as customer_experience_5403,
-    CAST(d.penalties_5404 * 100 AS BIGINT) as penalties_5404,
-    CAST(d.postage_5510 * 100 AS BIGINT) as postage_5510,
-    CAST(d.bank_buyout_fees_5520 * 100 AS BIGINT) as bank_buyout_fees_5520,
-    CAST(d.vsc_cor_5110 * 100 AS BIGINT) as vsc_cor_5110,
-    CAST(d.vsc_advance_5110a * 100 AS BIGINT) as vsc_advance_5110a,
-    CAST(d.gap_cor_5120 * 100 AS BIGINT) as gap_cor_5120,
-    CAST(d.gap_advance_5120a * 100 AS BIGINT) as gap_advance_5120a,
-    CAST(d.gross_profit * 100 AS BIGINT) as gross_profit,
-    CAST(d.gross_margin * 10000 AS BIGINT) as gross_margin,
+    -- Measures (multiply currency by 100, percentages by 10000, use COALESCE to default nulls to zero)
+    CAST(COALESCE(d.`4105_rev_reserve`, 0) * 100 AS BIGINT) as rev_reserve_4105,
+    CAST(COALESCE(d.reserve_bonus_rev_4106, 0) * 100 AS BIGINT) as reserve_bonus_rev_4106,
+    CAST(COALESCE(d.reserve_chargeback_rev_4107, 0) * 100 AS BIGINT) as reserve_chargeback_rev_4107,
+    CAST(COALESCE(d.vsc_rev_4110, 0) * 100 AS BIGINT) as vsc_rev_4110,
+    CAST(COALESCE(d.vsc_advance_rev_4110a, 0) * 100 AS BIGINT) as vsc_advance_rev_4110a,
+    CAST(COALESCE(d.vsc_volume_bonus_rev_4110b, 0) * 100 AS BIGINT) as vsc_volume_bonus_rev_4110b,
+    CAST(COALESCE(d.vsc_cost_rev_4110c, 0) * 100 AS BIGINT) as vsc_cost_rev_4110c,
+    CAST(COALESCE(d.vsc_chargeback_rev_4111, 0) * 100 AS BIGINT) as vsc_chargeback_rev_4111,
+    CAST(COALESCE(d.gap_rev_4120, 0) * 100 AS BIGINT) as gap_rev_4120,
+    CAST(COALESCE(d.gap_advance_rev_4120a, 0) * 100 AS BIGINT) as gap_advance_rev_4120a,
+    CAST(COALESCE(d.gap_volume_bonus_rev_4120b, 0) * 100 AS BIGINT) as gap_volume_bonus_rev_4120b,
+    CAST(COALESCE(d.gap_cost_rev_4120c, 0) * 100 AS BIGINT) as gap_cost_rev_4120c,
+    CAST(COALESCE(d.gap_chargeback_rev_4121, 0) * 100 AS BIGINT) as gap_chargeback_rev_4121,
+    CAST(COALESCE(d.doc_fees_rev_4130, 0) * 100 AS BIGINT) as doc_fees_rev_4130,
+    CAST(COALESCE(d.doc_fees_chargeback_rev_4130c, 0) * 100 AS BIGINT) as doc_fees_chargeback_rev_4130c,
+    CAST(COALESCE(d.titling_fees_rev_4141, 0) * 100 AS BIGINT) as titling_fees_rev_4141,
+    CAST(COALESCE(d.funding_clerks_5301, 0) * 100 AS BIGINT) as funding_clerks_5301,
+    CAST(COALESCE(d.commission_5302, 0) * 100 AS BIGINT) as commission_5302,
+    CAST(COALESCE(d.sales_guarantee_5303, 0) * 100 AS BIGINT) as sales_guarantee_5303,
+    CAST(COALESCE(d.ic_payoff_team_5304, 0) * 100 AS BIGINT) as ic_payoff_team_5304,
+    CAST(COALESCE(d.outbound_commission_5305, 0) * 100 AS BIGINT) as outbound_commission_5305,
+    CAST(COALESCE(d.title_clerks_5320, 0) * 100 AS BIGINT) as title_clerks_5320,
+    CAST(COALESCE(d.direct_emp_benefits_5330, 0) * 100 AS BIGINT) as direct_emp_benefits_5330,
+    CAST(COALESCE(d.direct_payroll_tax_5340, 0) * 100 AS BIGINT) as direct_payroll_tax_5340,
+    CAST(COALESCE(d.payoff_variance_5400, 0) * 100 AS BIGINT) as payoff_variance_5400,
+    CAST(COALESCE(d.sales_tax_variance_5401, 0) * 100 AS BIGINT) as sales_tax_variance_5401,
+    CAST(COALESCE(d.registration_variance_5402, 0) * 100 AS BIGINT) as registration_variance_5402,
+    CAST(COALESCE(d.customer_experience_5403, 0) * 100 AS BIGINT) as customer_experience_5403,
+    CAST(COALESCE(d.penalties_5404, 0) * 100 AS BIGINT) as penalties_5404,
+    CAST(COALESCE(d.postage_5510, 0) * 100 AS BIGINT) as postage_5510,
+    CAST(COALESCE(d.bank_buyout_fees_5520, 0) * 100 AS BIGINT) as bank_buyout_fees_5520,
+    CAST(COALESCE(d.vsc_cor_5110, 0) * 100 AS BIGINT) as vsc_cor_5110,
+    CAST(COALESCE(d.vsc_advance_5110a, 0) * 100 AS BIGINT) as vsc_advance_5110a,
+    CAST(COALESCE(d.gap_cor_5120, 0) * 100 AS BIGINT) as gap_cor_5120,
+    CAST(COALESCE(d.gap_advance_5120a, 0) * 100 AS BIGINT) as gap_advance_5120a,
+    CAST(COALESCE(d.gross_profit, 0) * 100 AS BIGINT) as gross_profit,
+    CAST(COALESCE(d.gross_margin, 0) * 10000 AS BIGINT) as gross_margin,
     CAST(d.repo AS BOOLEAN) as repo,
 
     'silver.deal.big_deal' as _source_table,

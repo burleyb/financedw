@@ -2,7 +2,7 @@
 -- Dimension table for employment status
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_employment_status (
+CREATE TABLE IF NOT EXISTS gold.finance.dim_employment_status (
   employment_status_key STRING NOT NULL, -- Natural key from source
   employment_status_description STRING,
   _source_table STRING,
@@ -16,7 +16,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes
-MERGE INTO finance_gold.finance.dim_employment_status AS target
+MERGE INTO gold.finance.dim_employment_status AS target
 USING (
   WITH source_statuses AS (
       SELECT DISTINCT employment_status
@@ -43,7 +43,7 @@ WHEN NOT MATCHED THEN
   VALUES (source.employment_status_key, source.employment_status_description, source._source_table, CURRENT_TIMESTAMP());
 
 -- Ensure 'Unknown' status exists
-MERGE INTO finance_gold.finance.dim_employment_status AS target
+MERGE INTO gold.finance.dim_employment_status AS target
 USING (SELECT 'Unknown' as employment_status_key, 'Unknown' as employment_status_description, 'static' as _source_table) AS source
 ON target.employment_status_key = source.employment_status_key
 WHEN NOT MATCHED THEN INSERT (employment_status_key, employment_status_description, _source_table, _load_timestamp)

@@ -2,7 +2,7 @@
 -- Dimension table for core deal attributes
 
 -- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS finance_gold.finance.dim_deal (
+CREATE TABLE IF NOT EXISTS gold.finance.dim_deal (
   deal_key STRING NOT NULL, -- Natural key from source (deal.id)
   -- Foreign Keys to other dimensions (will be populated correctly in fact tables)
   deal_state_key STRING,
@@ -37,7 +37,7 @@ TBLPROPERTIES (
 );
 
 -- 2. Merge incremental changes (SCD Type 1 for simplicity, update in place)
-MERGE INTO finance_gold.finance.dim_deal AS target
+MERGE INTO gold.finance.dim_deal AS target
 USING (
   SELECT
     d.id AS deal_key,
@@ -148,7 +148,7 @@ WHEN NOT MATCHED THEN
   );
 
 -- Add 'Unknown' Deal for referential integrity if needed
-MERGE INTO finance_gold.finance.dim_deal AS target
+MERGE INTO gold.finance.dim_deal AS target
 USING (
   SELECT
     '-1' as deal_key,
