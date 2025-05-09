@@ -39,24 +39,24 @@ TBLPROPERTIES (
 -- 2. Merge incremental changes (SCD Type 1 for simplicity, update in place)
 MERGE INTO gold.finance.dim_deal AS target
 USING (
-  SELECT
+  SELECT DISTINCT
     d.id AS deal_key,
     COALESCE(d.deal_state, 'Unknown') AS deal_state_key,
     COALESCE(d.type, 'Unknown') AS deal_type_key,
     COALESCE(d.source, 'Unknown') AS source_key,
-    COALESCE(d.option_type, 'Unknown') AS option_type_key,
+    COALESCE(d.option_type, 'noProducts') AS option_type_key,
     COALESCE(d.title_registration_option, 'Unknown') AS title_registration_option_key,
-    COALESCE(d.processor, 'Unknown') AS processor_key, -- Updated source and target key name
-    COALESCE(d.tax_processor, 'Unknown') AS tax_processor_key, -- Updated source and target key name
-    COALESCE(d.fee_processor, 'Unknown') AS fee_processor_key, -- Updated source and target key name
+    COALESCE(UPPER(d.processor), 'UNKNOWN') AS processor_key, -- Updated source and target key name
+    COALESCE(UPPER(d.tax_processor), 'UNKNOWN') AS tax_processor_key, -- Updated source and target key name
+    COALESCE(UPPER(d.fee_processor), 'UNKNOWN') AS fee_processor_key, -- Updated source and target key name
     COALESCE(d.lienholder_slug, d.lienholder_name, 'Unknown') AS lienholder_key, -- FK needs validation/lookup in Fact
-    d.plate_transfer,
-    d.title_only,
-    d.buyer_not_lessee,
-    d.down_payment_status,
-    d.needs_temporary_registration_tags,
-    d.source_name,
-    d.other_source_description,
+    COALESCE(CAST(d.plate_transfer AS BOOLEAN), FALSE) AS plate_transfer,
+    COALESCE(CAST(d.title_only AS BOOLEAN), FALSE) AS title_only,
+    COALESCE(CAST(d.buyer_not_lessee AS BOOLEAN), FALSE) AS buyer_not_lessee,
+    COALESCE(d.down_payment_status, 'Unknown') AS down_payment_status,
+    COALESCE(CAST(d.needs_temporary_registration_tags AS BOOLEAN), FALSE) AS needs_temporary_registration_tags,
+    COALESCE(d.source_name, 'Unknown') AS source_name,
+    COALESCE(d.other_source_description, 'Unknown') AS other_source_description,
     d.creation_date_utc,
     d.completion_date_utc,
     d.state_asof_utc,
@@ -64,7 +64,7 @@ USING (
     CURRENT_TIMESTAMP() as _load_timestamp
   FROM silver.deal.big_deal d
   -- Optional: Filter for recent changes if delta source is available
-  -- WHERE d.state_asof_utc > (SELECT MAX(_load_timestamp) FROM gold.finance.dim_deal WHERE _load_timestamp IS NOT NULL)
+  WHERE d.deal_state IS NOT NULL AND d.id != 0
 
   -- Ensure only the latest version of each deal is processed if source has duplicates per batch
   QUALIFY ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY d.state_asof_utc DESC) = 1
@@ -151,7 +151,7 @@ WHEN NOT MATCHED THEN
 MERGE INTO gold.finance.dim_deal AS target
 USING (
   SELECT
-    '-1' as deal_key,
+    '0' as deal_key,
     'Unknown' AS deal_state_key, 'Unknown' AS deal_type_key, 'Unknown' AS source_key,
     'Unknown' AS option_type_key, 'Unknown' AS title_registration_option_key,
     'Unknown' AS processor_key, 'Unknown' AS tax_processor_key, 'Unknown' AS fee_processor_key, -- Updated Unknown record

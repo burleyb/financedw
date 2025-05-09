@@ -44,3 +44,23 @@ SELECT
   CASE WHEN DAYOFWEEK(ds.date_actual) IN (1, 7) THEN true ELSE false END AS is_weekend
   -- Add is_holiday flag based on a separate holiday table/logic if needed
 FROM date_sequence ds; 
+
+
+INSERT INTO gold.finance.dim_date
+SELECT
+  0 AS date_key,
+  NULL AS date,
+  NULL AS year,
+  NULL AS quarter,
+  NULL AS month,
+  'Unknown' AS month_name,
+  NULL AS day_of_month,
+  NULL AS day_of_week,
+  'Unknown' AS day_name,
+  NULL AS day_of_year,
+  NULL AS week_of_year,
+  NULL AS fiscal_year,
+  NULL AS fiscal_quarter,
+  NULL AS fiscal_month,
+  false AS is_weekend
+WHERE NOT EXISTS (SELECT 1 FROM gold.finance.dim_date WHERE date_key = 0);

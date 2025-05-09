@@ -63,7 +63,7 @@ TBLPROPERTIES (
 -- 2. Merge incremental changes
 MERGE INTO gold.finance.fact_deal_netsuite AS target
 USING (
-  SELECT
+  SELECT DISTINCT
     d.id AS deal_key,
     CAST(DATE_FORMAT(d.ns_date, 'yyyyMMdd') AS INT) AS netsuite_posting_date_key,
     CAST(DATE_FORMAT(d.ns_date, 'HHmmss') AS INT) AS netsuite_posting_time_key,
@@ -112,7 +112,7 @@ USING (
     CURRENT_TIMESTAMP() as _load_timestamp
   FROM silver.deal.big_deal d
   -- Filter for relevant deals (e.g., those with NetSuite data or recent updates)
-  WHERE d.ns_date IS NOT NULL -- Filter based on the NetSuite date
+  WHERE d.ns_date IS NOT NULL AND d.deal_state IS NOT NULL AND d.id != 0
   -- Optional: Add time-based filter for incremental loads
   -- AND d.ns_date > (SELECT MAX(_load_timestamp) FROM gold.finance.fact_deal_netsuite WHERE _load_timestamp IS NOT NULL)
 

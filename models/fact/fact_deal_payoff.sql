@@ -32,7 +32,7 @@ TBLPROPERTIES (
 -- 2. Merge incremental changes
 MERGE INTO gold.finance.fact_deal_payoff AS target
 USING (
-  SELECT
+  SELECT DISTINCT
     d.id AS deal_key,
     COALESCE(d.lienholder_slug, d.lienholder_name, 'Unknown') AS lienholder_key,
     -- Using completion date as the primary date key, adjust if another date is more relevant
@@ -50,7 +50,7 @@ USING (
     CURRENT_TIMESTAMP() as _load_timestamp
   FROM silver.deal.big_deal d
   -- Filter for relevant deals (e.g., those with payoff info or recent updates)
-  WHERE (d.vehicle_payoff IS NOT NULL OR d.estimated_payoff IS NOT NULL OR d.user_entered_total_payoff IS NOT NULL OR d.vehicle_cost IS NOT NULL)
+  WHERE (d.vehicle_payoff IS NOT NULL OR d.estimated_payoff IS NOT NULL OR d.user_entered_total_payoff IS NOT NULL OR d.vehicle_cost IS NOT NULL AND d.deal_state IS NOT NULL AND d.id != 0)
   -- Optional: Add time-based filter for incremental loads
   -- AND d.state_asof_utc > (SELECT MAX(_load_timestamp) FROM gold.finance.fact_deal_payoff WHERE _load_timestamp IS NOT NULL)
 

@@ -32,7 +32,7 @@ TBLPROPERTIES (
 -- 2. Merge incremental changes
 MERGE INTO gold.finance.fact_deal_commissions AS target
 USING (
-  SELECT
+  SELECT DISTINCT
     sbd.id AS deal_key,
     -- Fetch setter and closer from bronze.deals
     COALESCE(bld.setter_id, 'No Setter') AS employee_setter_key,
@@ -62,9 +62,7 @@ USING (
   FROM silver.deal.big_deal sbd
   LEFT JOIN bronze.leaseend_db_public.deals bld ON sbd.id = bld.id -- Join silver big_deal with bronze deals
   -- Filter for relevant deals (e.g., those with commissions or recent updates)
-  -- Optional: Add time-based filter for incremental loads
-  -- AND sbd.state_asof_utc > (SELECT MAX(_load_timestamp) FROM gold.finance.fact_deal_commissions WHERE _load_timestamp IS NOT NULL)
-
+  WHERE sbd.deal_state IS NOT NULL AND sbd.id != 0
   -- Ensure only the latest version of each deal is processed if source has duplicates per batch
   QUALIFY ROW_NUMBER() OVER (PARTITION BY sbd.id ORDER BY sbd.state_asof_utc DESC) = 1
 

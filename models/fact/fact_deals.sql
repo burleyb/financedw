@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deals (
   -- Keys
   deal_key STRING NOT NULL, -- FK to dim_deal
   deal_state_key STRING,
+  deal_type_key STRING,
   driver_key STRING, -- FK to dim_driver
   vehicle_key STRING, -- FK to dim_vehicle
   bank_key STRING, -- FK to dim_bank
@@ -56,18 +57,18 @@ TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true', 'delta.autoOptimize.
 MERGE INTO gold.finance.fact_deals AS target
 USING (
   -- Select the latest deal data and join with dimensions to get foreign keys
-  SELECT
+  SELECT DISTINCT
     d.id AS deal_key,
     COALESCE(CAST(d.deal_state AS STRING), 'Unknown') AS deal_state_key,
+    COALESCE(CAST(d.type AS STRING), 'Unknown') AS deal_type_key,
     COALESCE(CAST(d.customer_id AS STRING), 'Unknown') AS driver_key, -- Adjust FK lookup if needed
 	  COALESCE(CAST(d.vin AS STRING), 'Unknown') AS vehicle_key, -- Adjust FK lookup if needed
-    COALESCE(CAST(d.bank AS STRING), 'Unknown') AS bank_key,
-    -- Derive option_type_key based on logic in dim_option_type
-    CONCAT(COALESCE(CAST(d.vsc_type AS STRING), 'N/A'), '|', CAST(CASE WHEN d.option_type IN ('vscPlusGap', 'gap') THEN true ELSE false END AS STRING)) as option_type_key,
-	  CAST(DATE_FORMAT(d.creation_date_utc, 'yyyyMMdd') AS INT) AS creation_date_key,
-	  CAST(DATE_FORMAT(d.creation_date_utc, 'HHmmss') AS INT) AS creation_time_key,
-    CAST(DATE_FORMAT(d.completion_date_utc, 'yyyyMMdd') AS INT) AS completion_date_key,
-	  CAST(DATE_FORMAT(d.completion_date_utc, 'HHmmss') AS INT) AS completion_time_key,
+    COALESCE(CAST(d.bank AS STRING), 'No Bank') AS bank_key,
+    COALESCE(CAST(d.option_type AS STRING), 'noProducts') as option_type_key,
+	  COALESCE(CAST(DATE_FORMAT(d.creation_date_utc, 'yyyyMMdd') AS INT), 0) AS creation_date_key,
+	  COALESCE(CAST(DATE_FORMAT(d.creation_date_utc, 'HHmmss') AS INT), 0) AS creation_time_key,
+    COALESCE(CAST(DATE_FORMAT(d.completion_date_utc, 'yyyyMMdd') AS INT), 0) AS completion_date_key,
+	  COALESCE(CAST(DATE_FORMAT(d.completion_date_utc, 'HHmmss') AS INT), 0) AS completion_time_key,
 
     -- Measures (multiply currency by 100, rates by 100, cast to BIGINT, use COALESCE to default nulls to zero)
     CAST(COALESCE(d.amount_financed, 0) * 100 AS BIGINT) as amount_financed_amount,
@@ -102,6 +103,7 @@ USING (
   FROM silver.deal.big_deal d
   -- Optional: Filter for recent changes if delta source is available
   -- WHERE d.state_asof_utc > (SELECT MAX(_load_timestamp) FROM gold.finance.fact_deals WHERE _load_timestamp IS NOT NULL)
+  WHERE d.deal_state IS NOT NULL AND d.id != 0
 
   -- Ensure only the latest version of each deal is processed if source has duplicates per batch
   QUALIFY ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY d.state_asof_utc DESC) = 1
@@ -115,6 +117,7 @@ WHEN MATCHED THEN
   UPDATE SET
     target.driver_key = source.driver_key,
     target.deal_state_key = source.deal_state_key,
+    target.deal_type_key = source.deal_type_key,
     target.vehicle_key = source.vehicle_key,
     target.bank_key = source.bank_key,
     target.option_type_key = source.option_type_key,
@@ -154,6 +157,7 @@ WHEN NOT MATCHED THEN
   INSERT (
     deal_key,
     deal_state_key,
+    deal_type_key,
     driver_key,
     vehicle_key,
     bank_key,
@@ -192,6 +196,7 @@ WHEN NOT MATCHED THEN
   VALUES (
     source.deal_key,
     source.deal_state_key,
+    source.deal_type_key,
     source.driver_key,
     source.vehicle_key,
     source.bank_key,

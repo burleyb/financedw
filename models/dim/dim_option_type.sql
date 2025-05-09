@@ -32,7 +32,7 @@ USING (
       WHEN 'vsc' THEN 'VSC Only'
       WHEN 'gap' THEN 'GAP Only'
       WHEN 'noProducts' THEN 'No Products'
-      ELSE COALESCE(s.option_type, 'Unknown') -- Handle potential future types
+      ELSE COALESCE(s.option_type, 'No Products') -- Handle potential future types
     END AS option_type_description,
     -- Derive flags based on type key
     CASE
