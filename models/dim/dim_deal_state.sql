@@ -52,13 +52,13 @@ USING (
     END AS deal_state_description,
     -- Derive active state flag based on business logic
     CASE
-      WHEN s.deal_state IN ('booted', 'finalized', 'closed') THEN false
+      WHEN s.deal_state IN ('booted', 'finalized') THEN false
       WHEN s.deal_state IS NULL THEN false -- NULL is not active
       ELSE true -- All other states are considered active/in progress
     END AS is_active_state,
     -- Derive final state flag based on business logic
     CASE
-      WHEN s.deal_state IN ('booted', 'finalized', 'closed', 'funded') THEN true
+      WHEN s.deal_state IN ('booted', 'finalized') THEN true
       ELSE false 
     END AS is_final_state,
     'silver.deal.big_deal' as _source_table,

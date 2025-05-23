@@ -62,7 +62,7 @@ USING (
     COALESCE(CAST(d.deal_state AS STRING), 'Unknown') AS deal_state_key,
     COALESCE(CAST(d.type AS STRING), 'Unknown') AS deal_type_key,
     COALESCE(CAST(d.customer_id AS STRING), 'Unknown') AS driver_key, -- Adjust FK lookup if needed
-	  COALESCE(CAST(d.vin AS STRING), 'Unknown') AS vehicle_key, -- Adjust FK lookup if needed
+	  COALESCE(CAST(LOWER(d.vin) AS STRING), 'Unknown') AS vehicle_key, -- Adjust FK lookup if needed
     COALESCE(CAST(d.bank AS STRING), 'No Bank') AS bank_key,
     COALESCE(CAST(d.option_type AS STRING), 'noProducts') as option_type_key,
 	  COALESCE(CAST(DATE_FORMAT(d.creation_date_utc, 'yyyyMMdd') AS INT), 0) AS creation_date_key,

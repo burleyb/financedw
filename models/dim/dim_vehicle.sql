@@ -33,8 +33,8 @@ MERGE INTO gold.finance.dim_vehicle AS target
 USING (
   -- Select the latest distinct vehicle data from the bronze cars table
   SELECT  
-    vin AS vehicle_key, -- Natural Key
-    COALESCE(CAST(vin AS STRING), 'Unknown') AS vin, -- Natural Key
+    LOWER(vin) AS vehicle_key, -- Natural Key
+    COALESCE(CAST(LOWER(vin) AS STRING), 'Unknown') AS vin, -- Natural Key
     COALESCE(CAST(deal_id AS STRING), 'Unknown') AS deal_id,
     COALESCE(make, 'Unknown') AS make,
     COALESCE(model, 'Unknown') AS model,
