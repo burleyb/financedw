@@ -40,13 +40,14 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deals (
   base_tax_amount BIGINT,
   warranty_tax_amount BIGINT,
   rpt_amount BIGINT, -- Revenue/Profit Type?
+  ally_fees_amount BIGINT,
 
   -- Other Measures
   term INT,
   days_to_payment INT,
 
   -- Metadata
-  _source_file_name STRING,
+  _source_table STRING,
   _load_timestamp TIMESTAMP
 )
 USING DELTA
@@ -93,11 +94,12 @@ USING (
     CAST(COALESCE(d.base_tax_amount, 0) * 100 AS BIGINT) as base_tax_amount,
     CAST(COALESCE(d.warranty_tax_amount, 0) * 100 AS BIGINT) as warranty_tax_amount,
     CAST(COALESCE(d.rpt, 0) * 100 AS BIGINT) as rpt_amount,
+    CAST(COALESCE(d.ally_fees, 0) * 100 AS BIGINT) as ally_fees_amount,
 
     CAST(d.term AS INT) as term,
     CAST(d.days_to_payment AS INT) as days_to_payment,
 
-    'silver.deal.big_deal' as _source_file_name,
+    'silver.deal.big_deal' as _source_table,
     CURRENT_TIMESTAMP() as _load_timestamp
 
   FROM silver.deal.big_deal d
@@ -147,9 +149,10 @@ WHEN MATCHED THEN
     target.base_tax_amount = source.base_tax_amount,
     target.warranty_tax_amount = source.warranty_tax_amount,
     target.rpt_amount = source.rpt_amount,
+    target.ally_fees_amount = source.ally_fees_amount,
     target.term = source.term,
     target.days_to_payment = source.days_to_payment,
-    target._source_file_name = source._source_file_name,
+    target._source_table = source._source_table,
     target._load_timestamp = current_timestamp()
 
 -- Insert new deals
@@ -188,9 +191,10 @@ WHEN NOT MATCHED THEN
     base_tax_amount,
     warranty_tax_amount,
     rpt_amount,
+    ally_fees_amount,
     term,
     days_to_payment,
-    _source_file_name,
+    _source_table,
     _load_timestamp
   )
   VALUES (
@@ -227,8 +231,9 @@ WHEN NOT MATCHED THEN
     source.base_tax_amount,
     source.warranty_tax_amount,
     source.rpt_amount,
+    source.ally_fees_amount,
     source.term,
     source.days_to_payment,
-    source._source_file_name,
+    source._source_table,
     source._load_timestamp
   );

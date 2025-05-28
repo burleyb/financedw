@@ -10,11 +10,16 @@ CREATE TABLE IF NOT EXISTS gold.finance.dim_driver (
   name_suffix STRING,
   email STRING,
   phone_number STRING,
+  home_phone_number STRING,
   city STRING,
   state STRING,
   zip STRING,
   county STRING,
-  _source_file_name STRING, -- Metadata: Originating file
+  dob DATE,
+  marital_status STRING,
+  age INT,
+  finscore DOUBLE,
+  _source_table STRING, -- Metadata: Originating table
   _load_timestamp TIMESTAMP -- Metadata: When the record was loaded/updated
 )
 USING DELTA
@@ -37,11 +42,24 @@ USING (
     name_suffix,
     email,
     phone_number,
+    home_phone_number,
     city,
     state,
     zip,
     county,
-    _metadata.file_path AS _source_file_name -- Capture source file metadata
+    CASE 
+      WHEN dob < '1900-01-01' THEN NULL 
+      ELSE dob 
+    END as dob,
+    marital_status,
+    CASE 
+      WHEN dob IS NOT NULL AND creation_date_utc IS NOT NULL 
+        AND dob >= '1900-01-01'
+      THEN CAST(FLOOR(MONTHS_BETWEEN(creation_date_utc, dob) / 12) AS INT)
+      ELSE NULL 
+    END as age,
+    finscore,
+    'silver.deal.big_deal' AS _source_table -- Capture source table metadata
   FROM silver.deal.big_deal
   WHERE customer_id IS NOT NULL -- Ensure we have a valid key
   -- Select the most recent record for each driver based on update_timestamp
@@ -61,8 +79,13 @@ WHEN MATCHED AND (
     target.state <> source.state OR
     target.zip <> source.zip OR
     target.county <> source.county OR
+    target.dob <> source.dob OR
+    target.marital_status <> source.marital_status OR
+    target.age <> source.age OR
+    target.finscore <> source.finscore OR
     (target.middle_name IS NULL AND source.middle_name IS NOT NULL) OR (target.middle_name IS NOT NULL AND source.middle_name IS NULL) OR (target.middle_name <> source.middle_name) OR
-    (target.name_suffix IS NULL AND source.name_suffix IS NOT NULL) OR (target.name_suffix IS NOT NULL AND source.name_suffix IS NULL) OR (target.name_suffix <> source.name_suffix)
+    (target.name_suffix IS NULL AND source.name_suffix IS NOT NULL) OR (target.name_suffix IS NOT NULL AND source.name_suffix IS NULL) OR (target.name_suffix <> source.name_suffix) OR
+    (target.home_phone_number IS NULL AND source.home_phone_number IS NOT NULL) OR (target.home_phone_number IS NOT NULL AND source.home_phone_number IS NULL) OR (target.home_phone_number <> source.home_phone_number)
     -- Add checks for all other relevant attributes
   ) THEN
   UPDATE SET
@@ -72,11 +95,16 @@ WHEN MATCHED AND (
     target.name_suffix = source.name_suffix,
     target.email = source.email,
     target.phone_number = source.phone_number,
+    target.home_phone_number = source.home_phone_number,
     target.city = source.city,
     target.state = source.state,
     target.zip = source.zip,
     target.county = source.county,
-    target._source_file_name = source._source_file_name,
+    target.dob = source.dob,
+    target.marital_status = source.marital_status,
+    target.age = source.age,
+    target.finscore = source.finscore,
+    target._source_table = source._source_table,
     target._load_timestamp = CURRENT_TIMESTAMP()
 
 -- Insert new records (driver_key is the natural key)
@@ -89,11 +117,16 @@ WHEN NOT MATCHED THEN
     name_suffix,
     email,
     phone_number,
+    home_phone_number,
     city,
     state,
     zip,
     county,
-    _source_file_name,
+    dob,
+    marital_status,
+    age,
+    finscore,
+    _source_table,
     _load_timestamp
   )
   VALUES (
@@ -104,10 +137,15 @@ WHEN NOT MATCHED THEN
     source.name_suffix,
     source.email,
     source.phone_number,
+    source.home_phone_number,
     source.city,
     source.state,
     source.zip,
     source.county,
-    source._source_file_name,
+    source.dob,
+    source.marital_status,
+    source.age,
+    source.finscore,
+    source._source_table,
     CURRENT_TIMESTAMP()
   );

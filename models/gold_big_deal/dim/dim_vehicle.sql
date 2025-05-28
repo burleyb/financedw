@@ -8,11 +8,19 @@ CREATE TABLE IF NOT EXISTS gold.finance.dim_vehicle (
   deal_id STRING, -- Foreign Key
   make STRING,
   model STRING,
-  model_year STRING,
+  model_year INT,
   color STRING,
   vehicle_type STRING,
   fuel_type STRING,
   kbb_trim_name STRING,
+  mileage INT,
+  odometer_status STRING,
+  jdp_retail_value DOUBLE,
+  jdp_trade_in_value DOUBLE,
+  jdp_valuation_date DATE,
+  kbb_retail_value DOUBLE,
+  kbb_trade_in_value DOUBLE,
+  kbb_valuation_date DATE,
   -- Add other relevant vehicle attributes if needed from the cars table
   _source_table STRING, -- Metadata: Originating source table
   _load_timestamp TIMESTAMP -- Metadata: When the record was loaded/updated
@@ -31,24 +39,32 @@ TBLPROPERTIES (
 -- 2. Merge incremental changes
 MERGE INTO gold.finance.dim_vehicle AS target
 USING (
-  -- Select the latest distinct vehicle data from the bronze cars table
+  -- Select the latest distinct vehicle data from the silver.deal.big_deal table
   SELECT  
     LOWER(vin) AS vehicle_key, -- Natural Key
     COALESCE(CAST(LOWER(vin) AS STRING), 'Unknown') AS vin, -- Natural Key
-    COALESCE(CAST(deal_id AS STRING), 'Unknown') AS deal_id,
+    COALESCE(CAST(id AS STRING), 'Unknown') AS deal_id,
     COALESCE(make, 'Unknown') AS make,
     COALESCE(model, 'Unknown') AS model,
-    COALESCE(year, 'Unknown') AS model_year, -- Source column is 'year'
+    CAST(COALESCE(model_year, 0) AS INT) AS model_year,
     COALESCE(color, 'Unknown') AS color,
     COALESCE(vehicle_type, 'Unknown') AS vehicle_type,
     COALESCE(fuel_type, 'Unknown') AS fuel_type,
     COALESCE(kbb_trim_name, 'Unknown') AS kbb_trim_name,
-    'bronze.leaseend_db_public.cars' AS _source_table -- Static source table name
-    -- Add other relevant attributes from bronze.leaseend_db_public.cars if needed
-  FROM bronze.leaseend_db_public.cars
+    CAST(COALESCE(mileage, 0) AS INT) AS mileage,
+    COALESCE(odometer_status, 'Unknown') AS odometer_status,
+    CAST(jdp_retail_value AS DOUBLE) AS jdp_retail_value,
+    CAST(jdp_trade_in_value AS DOUBLE) AS jdp_trade_in_value,
+    CAST(jdp_valuation_date AS DATE) AS jdp_valuation_date,
+    CAST(kbb_retail_value AS DOUBLE) AS kbb_retail_value,
+    CAST(kbb_trade_in_value AS DOUBLE) AS kbb_trade_in_value,
+    CAST(kbb_valuation_date AS DATE) AS kbb_valuation_date,
+    'silver.deal.big_deal' AS _source_table -- Static source table name
+    -- Add other relevant attributes from silver.deal.big_deal if needed
+  FROM silver.deal.big_deal
   WHERE vin IS NOT NULL -- Ensure we have a valid natural key
   -- Deduplicate based on VIN, taking the most recently updated record
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY vin ORDER BY updated_at DESC) = 1 -- Use updated_at from cars table
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY vin ORDER BY state_asof_utc DESC) = 1 -- Use state_asof_utc from big_deal table
 ) AS source
 ON target.vin = source.vin
 AND target.deal_id = source.deal_id
@@ -60,6 +76,14 @@ WHEN MATCHED AND (
     target.color <> source.color OR
     target.vehicle_type <> source.vehicle_type OR
     target.fuel_type <> source.fuel_type OR
+    target.mileage <> source.mileage OR
+    target.odometer_status <> source.odometer_status OR
+    target.jdp_retail_value <> source.jdp_retail_value OR
+    target.jdp_trade_in_value <> source.jdp_trade_in_value OR
+    target.jdp_valuation_date <> source.jdp_valuation_date OR
+    target.kbb_retail_value <> source.kbb_retail_value OR
+    target.kbb_trade_in_value <> source.kbb_trade_in_value OR
+    target.kbb_valuation_date <> source.kbb_valuation_date OR
     -- Handle NULL comparisons carefully for kbb_trim_name
     (target.kbb_trim_name IS NULL AND source.kbb_trim_name IS NOT NULL) OR (target.kbb_trim_name IS NOT NULL AND source.kbb_trim_name IS NULL) OR (target.kbb_trim_name <> source.kbb_trim_name)
     -- Add checks for all other relevant attributes if added
@@ -73,6 +97,14 @@ WHEN MATCHED AND (
     target.vehicle_type = source.vehicle_type,
     target.fuel_type = source.fuel_type,
     target.kbb_trim_name = source.kbb_trim_name,
+    target.mileage = source.mileage,
+    target.odometer_status = source.odometer_status,
+    target.jdp_retail_value = source.jdp_retail_value,
+    target.jdp_trade_in_value = source.jdp_trade_in_value,
+    target.jdp_valuation_date = source.jdp_valuation_date,
+    target.kbb_retail_value = source.kbb_retail_value,
+    target.kbb_trade_in_value = source.kbb_trade_in_value,
+    target.kbb_valuation_date = source.kbb_valuation_date,
     -- Update other attributes if added
     target._source_table = source._source_table, -- Update source table info
     target._load_timestamp = current_timestamp()
@@ -90,6 +122,14 @@ WHEN NOT MATCHED THEN
     vehicle_type,
     fuel_type,
     kbb_trim_name,
+    mileage,
+    odometer_status,
+    jdp_retail_value,
+    jdp_trade_in_value,
+    jdp_valuation_date,
+    kbb_retail_value,
+    kbb_trade_in_value,
+    kbb_valuation_date,
     _source_table, -- Use _source_table
     _load_timestamp
   )
@@ -104,6 +144,14 @@ WHEN NOT MATCHED THEN
     source.vehicle_type,
     source.fuel_type,
     source.kbb_trim_name,
+    source.mileage,
+    source.odometer_status,
+    source.jdp_retail_value,
+    source.jdp_trade_in_value,
+    source.jdp_valuation_date,
+    source.kbb_retail_value,
+    source.kbb_trade_in_value,
+    source.kbb_valuation_date,
     source._source_table, -- Use _source_table
     current_timestamp()
   );
@@ -111,7 +159,7 @@ WHEN NOT MATCHED THEN
 
   -- Ensure 'Unknown' type exists for handling NULLs or empty strings
 MERGE INTO gold.finance.dim_vehicle AS target
-USING (SELECT 'Unknown' as vehicle_key, 'Unknown' as vin, 'Unknown' as deal_id, 'Unknown' as make, 'Unknown' as model, 'Unknown' as model_year, 'Unknown' as color, 'Unknown' as vehicle_type, 'Unknown' as fuel_type, 'Unknown' as kbb_trim_name, 'static' as _source_table) AS source
+USING (SELECT 'Unknown' as vehicle_key, 'Unknown' as vin, 'Unknown' as deal_id, 'Unknown' as make, 'Unknown' as model, 0 as model_year, 'Unknown' as color, 'Unknown' as vehicle_type, 'Unknown' as fuel_type, 'Unknown' as kbb_trim_name, 0 as mileage, 'Unknown' as odometer_status, NULL as jdp_retail_value, NULL as jdp_trade_in_value, NULL as jdp_valuation_date, NULL as kbb_retail_value, NULL as kbb_trade_in_value, NULL as kbb_valuation_date, 'static' as _source_table) AS source
 ON target.vehicle_key = source.vehicle_key
-WHEN NOT MATCHED THEN INSERT (vehicle_key, vin, make, model, model_year, color, vehicle_type, fuel_type, kbb_trim_name, _source_table, _load_timestamp)
-VALUES (source.vehicle_key, source.vin, source.make, source.model, source.model_year, source.color, source.vehicle_type, source.fuel_type, source.kbb_trim_name, source._source_table, current_timestamp());
+WHEN NOT MATCHED THEN INSERT (vehicle_key, vin, deal_id, make, model, model_year, color, vehicle_type, fuel_type, kbb_trim_name, mileage, odometer_status, jdp_retail_value, jdp_trade_in_value, jdp_valuation_date, kbb_retail_value, kbb_trade_in_value, kbb_valuation_date, _source_table, _load_timestamp)
+VALUES (source.vehicle_key, source.vin, source.deal_id, source.make, source.model, source.model_year, source.color, source.vehicle_type, source.fuel_type, source.kbb_trim_name, source.mileage, source.odometer_status, source.jdp_retail_value, source.jdp_trade_in_value, source.jdp_valuation_date, source.kbb_retail_value, source.kbb_trade_in_value, source.kbb_valuation_date, source._source_table, current_timestamp());
