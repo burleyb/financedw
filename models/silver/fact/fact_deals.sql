@@ -1,7 +1,6 @@
 -- models/silver/fact/fact_deals.sql
 
--- Fact table sourcing directly from bronze tables for silver layer
--- This replicates the logic from bigdealleaseendcreation.py in SQL form
+-- Primary deals fact table sourced from bronze tables
 
 -- 1. Create the table if it doesn't exist
 CREATE TABLE IF NOT EXISTS silver.finance.fact_deals (
@@ -40,203 +39,153 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deals (
   reserve_amount BIGINT,
   base_tax_amount BIGINT,
   warranty_tax_amount BIGINT,
-  rpt_amount BIGINT, -- Revenue/Profit Type
+  rpt_amount BIGINT, -- Revenue/Profit Type?
+  ally_fees_amount BIGINT,
 
   -- Other Measures
   term INT,
   days_to_payment INT,
 
   -- Metadata
-  _source_file_name STRING,
+  _source_table STRING,
   _load_timestamp TIMESTAMP
 )
 USING DELTA
-PARTITIONED BY (creation_date_key)
-TBLPROPERTIES ('delta.autoOptimize.optimizeWrite' = 'true', 'delta.autoOptimize.autoCompact' = 'true');
+PARTITIONED BY (creation_date_key) -- Partitioning by date key is common for fact tables
+TBLPROPERTIES (
+    'delta.autoOptimize.optimizeWrite' = 'true', 
+    'delta.autoOptimize.autoCompact' = 'true'
+);
 
 -- 2. Merge incremental changes
 MERGE INTO silver.finance.fact_deals AS target
 USING (
-  WITH latest_financial_infos AS (
-    SELECT 
-      deal_id,
-      money_down,
-      title,
-      total_fee_amount,
-      doc_fee,
-      vsc_price,
-      vsc_cost,
-      gap_price,
-      gap_cost,
-      days_to_payment,
-      first_payment_date,
-      sell_rate,
-      term,
-      bank,
-      vsc_term,
-      payment,
-      amount_financed,
-      buy_rate,
-      profit,
-      option_type,
-      setter_commission,
-      closer_commission,
-      plate_transfer,
-      atc_quote_name,
-      sales_tax_rate,
-      reserve,
-      vsc_type,
-      title_only,
-      processor,
-      commissionable_gross_revenue,
-      ns_invoice_date,
-      base_tax_amount,
-      warranty_tax_amount,
-      tax_processor,
-      fee_processor,
-      com_rate_markup,
-      approval_on_deal_processing,
-      finished_documents_screen,
-      buyer_not_lessee,
-      reached_documents_screen,
-      down_payment_status,
-      bank_fees,
-      user_entered_reserve,
-      card_payment_amount_limit,
-      registration_transfer_fee,
-      title_fee,
-      new_registration_fee,
-      title_registration_option,
-      pen_maintenance_contract_number,
-      credit_card_payment_amount_limit,
-      quick_notes,
-      needs_temporary_registration_tags,
-      commissionable_profit,
-      -- Calculate vsc_rev
-      CASE 
-        WHEN option_type IN ('vsc', 'vscPlusGap') THEN COALESCE(vsc_price, 0) - COALESCE(vsc_cost, 0)
-        ELSE 0
-      END AS vsc_rev,
-      -- Calculate gap_rev
-      CASE 
-        WHEN option_type IN ('gap', 'vscPlusGap') THEN COALESCE(gap_price, 0) - COALESCE(gap_cost, 0)
-        ELSE 0
-      END AS gap_rev,
-      ROW_NUMBER() OVER (PARTITION BY deal_id ORDER BY updated_at DESC) as rn
-    FROM bronze.leaseend_db_public.financial_infos
-    WHERE _fivetran_deleted = FALSE OR _fivetran_deleted IS NULL
-  ),
-  
-  latest_cars AS (
-    SELECT 
-      deal_id,
-      LOWER(vin) as vin,
-      color,
-      mileage,
-      book_value,
-      CAST(year AS INT) as model_year,
-      UPPER(make) as make,
-      UPPER(model) as model,
-      retail_book_value,
-      fuel_type,
-      vehicle_type,
-      kbb_valuation_date,
-      kbb_vehicle_name,
-      kbb_lending_mileage_adjustment,
-      kbb_lending_option_adjustment,
-      kbb_retail_mileage_adjustment,
-      kbb_retail_option_adjustment,
-      kbb_trim_name,
-      mmr,
-      license_plate_number,
-      license_plate_state,
-      registration_expiration,
-      odometer_status,
-      jdp_adjusted_clean_retail,
-      jdp_adjusted_clean_trade,
-      jdp_mileage_adjustment,
-      jdp_trim_body,
-      jdp_valuation_date,
-      jdp_vehicle_accessories,
-      ROW_NUMBER() OVER (PARTITION BY deal_id ORDER BY updated_at DESC) as rn
-    FROM bronze.leaseend_db_public.cars
-    WHERE _fivetran_deleted = FALSE OR _fivetran_deleted IS NULL
-  ),
-  
-  latest_deal_states AS (
-    SELECT 
-      deal_id,
-      state,
-      CAST(updated_date_utc AS TIMESTAMP) as state_asof_utc,
-      ROW_NUMBER() OVER (PARTITION BY deal_id, state ORDER BY updated_date_utc DESC) as rn
-    FROM bronze.leaseend_db_public.deal_states
-    WHERE _fivetran_deleted = FALSE OR _fivetran_deleted IS NULL
-  ),
-  
-  deal_data AS (
-    SELECT DISTINCT
-      d.id AS deal_key,
-      COALESCE(CAST(d.state AS STRING), 'Unknown') AS deal_state_key,
-      COALESCE(CAST(d.type AS STRING), 'Unknown') AS deal_type_key,
-      COALESCE(CAST(d.customer_id AS STRING), 'Unknown') AS driver_key,
-      COALESCE(CAST(c.vin AS STRING), 'Unknown') AS vehicle_key,
-      COALESCE(CAST(fi.bank AS STRING), 'No Bank') AS bank_key,
-      COALESCE(CAST(fi.option_type AS STRING), 'noProducts') as option_type_key,
-      COALESCE(CAST(DATE_FORMAT(d.creation_date_utc, 'yyyyMMdd') AS INT), 0) AS creation_date_key,
-      COALESCE(CAST(DATE_FORMAT(d.creation_date_utc, 'HHmmss') AS INT), 0) AS creation_time_key,
-      COALESCE(CAST(DATE_FORMAT(d.completion_date_utc, 'yyyyMMdd') AS INT), 0) AS completion_date_key,
-      COALESCE(CAST(DATE_FORMAT(d.completion_date_utc, 'HHmmss') AS INT), 0) AS completion_time_key,
-
-      -- Measures (multiply currency by 100, rates by 100, cast to BIGINT, use COALESCE to default nulls to zero)
-      CAST(COALESCE(fi.amount_financed, 0) * 100 AS BIGINT) as amount_financed_amount,
-      CAST(COALESCE(fi.payment, 0) * 100 AS BIGINT) as payment_amount,
-      CAST(COALESCE(fi.money_down, 0) * 100 AS BIGINT) as money_down_amount,
-      CAST(COALESCE(fi.sell_rate, 0) * 100 AS BIGINT) as sell_rate_amount,
-      CAST(COALESCE(fi.buy_rate, 0) * 100 AS BIGINT) as buy_rate_amount,
-      CAST(COALESCE(fi.profit, 0) * 100 AS BIGINT) as profit_amount,
-      CAST(COALESCE(fi.vsc_price, 0) * 100 AS BIGINT) as vsc_price_amount,
-      CAST(COALESCE(fi.vsc_cost, 0) * 100 AS BIGINT) as vsc_cost_amount,
-      CAST(COALESCE(fi.vsc_rev, 0) * 100 AS BIGINT) as vsc_rev_amount,
-      CAST(COALESCE(fi.gap_price, 0) * 100 AS BIGINT) as gap_price_amount,
-      CAST(COALESCE(fi.gap_cost, 0) * 100 AS BIGINT) as gap_cost_amount,
-      CAST(COALESCE(fi.gap_rev, 0) * 100 AS BIGINT) as gap_rev_amount,
-      CAST(COALESCE(fi.total_fee_amount, 0) * 100 AS BIGINT) as total_fee_amount,
-      CAST(COALESCE(fi.doc_fee, 0) * 100 AS BIGINT) as doc_fee_amount,
-      CAST(COALESCE(fi.bank_fees, 0) * 100 AS BIGINT) as bank_fees_amount,
-      CAST(COALESCE(fi.registration_transfer_fee, 0) * 100 AS BIGINT) as registration_transfer_fee_amount,
-      CAST(COALESCE(fi.title_fee, 0) * 100 AS BIGINT) as title_fee_amount,
-      CAST(COALESCE(fi.new_registration_fee, 0) * 100 AS BIGINT) as new_registration_fee_amount,
-      CAST(COALESCE(fi.reserve, 0) * 100 AS BIGINT) as reserve_amount,
-      CAST(COALESCE(fi.base_tax_amount, 0) * 100 AS BIGINT) as base_tax_amount,
-      CAST(COALESCE(fi.warranty_tax_amount, 0) * 100 AS BIGINT) as warranty_tax_amount,
-      -- Calculate rpt as title + doc_fee + profit (matching existing schema)
-      CAST(COALESCE(
-        COALESCE(fi.title, 0) + 
-        COALESCE(fi.doc_fee, 0) + 
-        COALESCE(fi.profit, 0), 0) * 100 AS BIGINT) as rpt_amount,
-
-      CAST(fi.term AS INT) as term,
-      CAST(fi.days_to_payment AS INT) as days_to_payment,
-
-      'bronze.leaseend_db_public.deals+financial_infos+cars' as _source_file_name,
-      CURRENT_TIMESTAMP() as _load_timestamp,
-      
-      -- Include state_asof_utc for deduplication
-      COALESCE(ds.state_asof_utc, d.updated_at) as state_asof_utc
-
+  -- Select the latest deal data and join with dimensions to get foreign keys
+  WITH deal_data AS (
+    SELECT
+      d.id,
+      d.state as deal_state,
+      d.type as deal_type,
+      d.customer_id,
+      d.creation_date_utc,
+      d.completion_date_utc,
+      d.source,
+      d.updated_at,
+      ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY d.updated_at DESC) as rn
     FROM bronze.leaseend_db_public.deals d
-    LEFT JOIN latest_financial_infos fi ON d.id = fi.deal_id AND fi.rn = 1
-    LEFT JOIN latest_cars c ON d.id = c.deal_id AND c.rn = 1
-    LEFT JOIN latest_deal_states ds ON d.id = ds.deal_id AND d.state = ds.state AND ds.rn = 1
-    WHERE (d._fivetran_deleted = FALSE OR d._fivetran_deleted IS NULL)
-      AND d.state IS NOT NULL 
-      AND d.id != 0
-
-    -- Ensure only the latest version of each deal is processed
-    QUALIFY ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY COALESCE(ds.state_asof_utc, d.updated_at) DESC) = 1
+    WHERE d.id IS NOT NULL
+  ),
+  car_data AS (
+    SELECT
+      c.deal_id,
+      LOWER(c.vin) as vin,
+      c.updated_at,
+      ROW_NUMBER() OVER (PARTITION BY c.deal_id ORDER BY c.updated_at DESC) as rn
+    FROM bronze.leaseend_db_public.cars c
+    WHERE c.deal_id IS NOT NULL AND c.vin IS NOT NULL
+  ),
+  financial_data AS (
+    SELECT
+      fi.deal_id,
+      fi.amount_financed,
+      fi.payment,
+      fi.money_down,
+      fi.sell_rate,
+      fi.buy_rate,
+      fi.profit,
+      fi.vsc_price,
+      fi.vsc_cost,
+      fi.gap_price,
+      fi.gap_cost,
+      fi.total_fee_amount,
+      fi.doc_fee,
+      fi.bank_fees,
+      fi.registration_transfer_fee,
+      fi.title,
+      fi.new_registration_fee,
+      fi.reserve,
+      fi.base_tax_amount,
+      fi.warranty_tax_amount,
+      fi.option_type,
+      fi.bank,
+      fi.term,
+      fi.days_to_payment,
+      -- Calculate derived fields
+      CASE 
+        WHEN fi.option_type = 'vsc' THEN 675
+        WHEN fi.option_type = 'gap' THEN 50
+        WHEN fi.option_type = 'vscPlusGap' THEN 725
+        ELSE 0
+      END as ally_fees,
+      CASE 
+        WHEN fi.option_type IN ('vsc', 'vscPlusGap') 
+        THEN COALESCE(fi.vsc_price, 0) - COALESCE(fi.vsc_cost, 0)
+        ELSE 0
+      END as vsc_rev,
+      CASE 
+        WHEN fi.option_type IN ('gap', 'vscPlusGap') 
+        THEN COALESCE(fi.gap_price, 0) - COALESCE(fi.gap_cost, 0)
+        ELSE 0
+      END as gap_rev,
+      fi.updated_at,
+      ROW_NUMBER() OVER (PARTITION BY fi.deal_id ORDER BY fi.updated_at DESC) as rn
+    FROM bronze.leaseend_db_public.financial_infos fi
+    WHERE fi.deal_id IS NOT NULL
   )
-  
-  SELECT * FROM deal_data
+  SELECT DISTINCT
+    CAST(dd.id AS STRING) AS deal_key,
+    COALESCE(CAST(dd.deal_state AS STRING), 'Unknown') AS deal_state_key,
+    COALESCE(CAST(dd.deal_type AS STRING), 'Unknown') AS deal_type_key,
+    COALESCE(CAST(dd.customer_id AS STRING), 'Unknown') AS driver_key,
+    COALESCE(CAST(cd.vin AS STRING), 'Unknown') AS vehicle_key,
+    COALESCE(CAST(fd.bank AS STRING), 'No Bank') AS bank_key,
+    COALESCE(CAST(fd.option_type AS STRING), 'noProducts') as option_type_key,
+    COALESCE(CAST(DATE_FORMAT(dd.creation_date_utc, 'yyyyMMdd') AS INT), 0) AS creation_date_key,
+    COALESCE(CAST(DATE_FORMAT(dd.creation_date_utc, 'HHmmss') AS INT), 0) AS creation_time_key,
+    COALESCE(CAST(DATE_FORMAT(dd.completion_date_utc, 'yyyyMMdd') AS INT), 0) AS completion_date_key,
+    COALESCE(CAST(DATE_FORMAT(dd.completion_date_utc, 'HHmmss') AS INT), 0) AS completion_time_key,
+
+    -- Measures (multiply currency by 100, rates by 100, cast to BIGINT, use COALESCE to default nulls to zero)
+    CAST(COALESCE(fd.amount_financed, 0) * 100 AS BIGINT) as amount_financed_amount,
+    CAST(COALESCE(fd.payment, 0) * 100 AS BIGINT) as payment_amount,
+    CAST(COALESCE(fd.money_down, 0) * 100 AS BIGINT) as money_down_amount,
+    CAST(COALESCE(fd.sell_rate, 0) * 100 AS BIGINT) as sell_rate_amount,
+    CAST(COALESCE(fd.buy_rate, 0) * 100 AS BIGINT) as buy_rate_amount,
+    CAST(COALESCE(fd.profit, 0) * 100 AS BIGINT) as profit_amount,
+    CAST(COALESCE(fd.vsc_price, 0) * 100 AS BIGINT) as vsc_price_amount,
+    CAST(COALESCE(fd.vsc_cost, 0) * 100 AS BIGINT) as vsc_cost_amount,
+    CAST(COALESCE(fd.vsc_rev, 0) * 100 AS BIGINT) as vsc_rev_amount,
+    CAST(COALESCE(fd.gap_price, 0) * 100 AS BIGINT) as gap_price_amount,
+    CAST(COALESCE(fd.gap_cost, 0) * 100 AS BIGINT) as gap_cost_amount,
+    CAST(COALESCE(fd.gap_rev, 0) * 100 AS BIGINT) as gap_rev_amount,
+    CAST(COALESCE(fd.total_fee_amount, 0) * 100 AS BIGINT) as total_fee_amount,
+    CAST(COALESCE(fd.doc_fee, 0) * 100 AS BIGINT) as doc_fee_amount,
+    CAST(COALESCE(fd.bank_fees, 0) * 100 AS BIGINT) as bank_fees_amount,
+    CAST(COALESCE(fd.registration_transfer_fee, 0) * 100 AS BIGINT) as registration_transfer_fee_amount,
+    CAST(COALESCE(fd.title, 0) * 100 AS BIGINT) as title_fee_amount,
+    CAST(COALESCE(fd.new_registration_fee, 0) * 100 AS BIGINT) as new_registration_fee_amount,
+    CAST(COALESCE(fd.reserve, 0) * 100 AS BIGINT) as reserve_amount,
+    CAST(COALESCE(fd.base_tax_amount, 0) * 100 AS BIGINT) as base_tax_amount,
+    CAST(COALESCE(fd.warranty_tax_amount, 0) * 100 AS BIGINT) as warranty_tax_amount,
+    CAST(COALESCE(fd.ally_fees, 0) * 100 AS BIGINT) as ally_fees_amount,
+    CAST(COALESCE(
+      COALESCE(fd.title, 0) + 
+      COALESCE(fd.doc_fee, 0) + 
+      COALESCE(fd.profit, 0) + 
+      COALESCE(fd.ally_fees, 0), 0
+    ) * 100 AS BIGINT) as rpt_amount,
+
+    CAST(fd.term AS INT) as term,
+    CAST(fd.days_to_payment AS INT) as days_to_payment,
+
+    'bronze.leaseend_db_public.deals' as _source_table
+
+  FROM deal_data dd
+  LEFT JOIN car_data cd ON dd.id = cd.deal_id AND cd.rn = 1
+  LEFT JOIN financial_data fd ON dd.id = fd.deal_id AND fd.rn = 1
+  WHERE dd.rn = 1
+    AND dd.deal_state IS NOT NULL 
+    AND dd.id != 0
 
 ) AS source
 ON target.deal_key = source.deal_key
@@ -276,10 +225,11 @@ WHEN MATCHED THEN
     target.base_tax_amount = source.base_tax_amount,
     target.warranty_tax_amount = source.warranty_tax_amount,
     target.rpt_amount = source.rpt_amount,
+    target.ally_fees_amount = source.ally_fees_amount,
     target.term = source.term,
     target.days_to_payment = source.days_to_payment,
-    target._source_file_name = source._source_file_name,
-    target._load_timestamp = current_timestamp()
+    target._source_table = source._source_table,
+    target._load_timestamp = CURRENT_TIMESTAMP()
 
 -- Insert new deals
 WHEN NOT MATCHED THEN
@@ -317,9 +267,10 @@ WHEN NOT MATCHED THEN
     base_tax_amount,
     warranty_tax_amount,
     rpt_amount,
+    ally_fees_amount,
     term,
     days_to_payment,
-    _source_file_name,
+    _source_table,
     _load_timestamp
   )
   VALUES (
@@ -356,8 +307,9 @@ WHEN NOT MATCHED THEN
     source.base_tax_amount,
     source.warranty_tax_amount,
     source.rpt_amount,
+    source.ally_fees_amount,
     source.term,
     source.days_to_payment,
-    source._source_file_name,
-    source._load_timestamp
+    source._source_table,
+    CURRENT_TIMESTAMP()
   ); 
