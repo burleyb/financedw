@@ -1,4 +1,5 @@
 -- models/gold/dim/dim_deal.sql
+DROP TABLE gold.finance.dim_deal;
 -- Gold layer dimension table sourcing from silver layer
 -- This table provides business-ready, optimized deal attributes for analytics
 

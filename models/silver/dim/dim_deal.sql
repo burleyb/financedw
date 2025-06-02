@@ -1,4 +1,5 @@
 -- models/silver/dim/dim_deal.sql
+DROP TABLE silver.finance.dim_deal;
 -- Dimension table for core deal attributes sourcing directly from bronze tables
 
 -- 1. Define Table Structure
@@ -128,6 +129,7 @@ USING (
   WHERE (d._fivetran_deleted = FALSE OR d._fivetran_deleted IS NULL)
     AND d.state IS NOT NULL 
     AND d.id != 0
+    AND (d._fivetran_deleted = FALSE OR d._fivetran_deleted IS NULL)
 
   -- Ensure only the latest version of each deal is processed
   QUALIFY ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY COALESCE(ds.state_asof_utc, d.updated_at) DESC) = 1

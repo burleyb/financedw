@@ -40,7 +40,6 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deals (
   base_tax_amount BIGINT,
   warranty_tax_amount BIGINT,
   rpt_amount BIGINT, -- Revenue/Profit Type?
-  ally_fees_amount BIGINT,
 
   -- Other Measures
   term INT,
@@ -94,7 +93,6 @@ USING (
     CAST(COALESCE(d.base_tax_amount, 0) * 100 AS BIGINT) as base_tax_amount,
     CAST(COALESCE(d.warranty_tax_amount, 0) * 100 AS BIGINT) as warranty_tax_amount,
     CAST(COALESCE(d.rpt, 0) * 100 AS BIGINT) as rpt_amount,
-    CAST(COALESCE(d.ally_fees, 0) * 100 AS BIGINT) as ally_fees_amount,
 
     CAST(d.term AS INT) as term,
     CAST(d.days_to_payment AS INT) as days_to_payment,
@@ -149,7 +147,6 @@ WHEN MATCHED THEN
     target.base_tax_amount = source.base_tax_amount,
     target.warranty_tax_amount = source.warranty_tax_amount,
     target.rpt_amount = source.rpt_amount,
-    target.ally_fees_amount = source.ally_fees_amount,
     target.term = source.term,
     target.days_to_payment = source.days_to_payment,
     target._source_table = source._source_table,
@@ -191,7 +188,6 @@ WHEN NOT MATCHED THEN
     base_tax_amount,
     warranty_tax_amount,
     rpt_amount,
-    ally_fees_amount,
     term,
     days_to_payment,
     _source_table,
@@ -231,7 +227,6 @@ WHEN NOT MATCHED THEN
     source.base_tax_amount,
     source.warranty_tax_amount,
     source.rpt_amount,
-    source.ally_fees_amount,
     source.term,
     source.days_to_payment,
     source._source_table,

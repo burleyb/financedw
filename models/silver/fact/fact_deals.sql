@@ -1,5 +1,5 @@
 -- models/silver/fact/fact_deals.sql
-
+DROP TABLE silver.finance.fact_deals ;
 -- Primary deals fact table sourced from bronze tables
 
 -- 1. Create the table if it doesn't exist
@@ -73,12 +73,12 @@ USING (
       d.updated_at,
       ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY d.updated_at DESC) as rn
     FROM bronze.leaseend_db_public.deals d
-    WHERE d.id IS NOT NULL
+    WHERE d.id IS NOT NULL AND (d._fivetran_deleted = FALSE OR d._fivetran_deleted IS NULL)
   ),
   car_data AS (
     SELECT
       c.deal_id,
-      LOWER(c.vin) as vin,
+      UPPER(c.vin) as vin,
       c.updated_at,
       ROW_NUMBER() OVER (PARTITION BY c.deal_id ORDER BY c.updated_at DESC) as rn
     FROM bronze.leaseend_db_public.cars c
@@ -106,24 +106,24 @@ USING (
       fi.reserve,
       fi.base_tax_amount,
       fi.warranty_tax_amount,
-      fi.option_type,
+      COALESCE(fi.option_type, 'noProducts') AS option_type,
       fi.bank,
       fi.term,
       fi.days_to_payment,
       -- Calculate derived fields
       CASE 
-        WHEN fi.option_type = 'vsc' THEN 675
-        WHEN fi.option_type = 'gap' THEN 50
-        WHEN fi.option_type = 'vscPlusGap' THEN 725
+        WHEN COALESCE(fi.option_type, 'noProducts') = 'vsc' THEN 675
+        WHEN COALESCE(fi.option_type, 'noProducts') = 'gap' THEN 50
+        WHEN COALESCE(fi.option_type, 'noProducts') = 'vscPlusGap' THEN 725
         ELSE 0
       END as ally_fees,
       CASE 
-        WHEN fi.option_type IN ('vsc', 'vscPlusGap') 
+        WHEN COALESCE(fi.option_type, 'noProducts') IN ('vsc', 'vscPlusGap') 
         THEN COALESCE(fi.vsc_price, 0) - COALESCE(fi.vsc_cost, 0)
         ELSE 0
       END as vsc_rev,
       CASE 
-        WHEN fi.option_type IN ('gap', 'vscPlusGap') 
+        WHEN COALESCE(fi.option_type, 'noProducts') IN ('gap', 'vscPlusGap') 
         THEN COALESCE(fi.gap_price, 0) - COALESCE(fi.gap_cost, 0)
         ELSE 0
       END as gap_rev,
