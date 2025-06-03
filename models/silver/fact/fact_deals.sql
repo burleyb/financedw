@@ -16,6 +16,16 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deals (
   creation_time_key INT, -- FK to dim_time
   completion_date_key INT, -- FK to dim_date
   completion_time_key INT, -- FK to dim_time
+  revenue_recognition_date_key INT, -- FK to dim_date - based on 'signed' state
+  revenue_recognition_time_key INT, -- FK to dim_time - based on 'signed' state
+  
+  -- Additional Key Milestone Dates from deal_states
+  signed_date_key INT, -- When deal was signed (revenue recognition)
+  signed_time_key INT,
+  funded_date_key INT, -- When deal was funded (cash flow)
+  funded_time_key INT,
+  finalized_date_key INT, -- When deal was finalized (completion)
+  finalized_time_key INT,
 
   -- Core Deal Measures (Stored as BIGINT cents)
   amount_financed_amount BIGINT,
@@ -45,13 +55,19 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deals (
   -- Other Measures
   term INT,
   days_to_payment INT,
+  
+  -- Process Timing Measures (derived from deal_states)
+  days_to_sign INT, -- Days from creation to signed
+  days_to_fund INT, -- Days from creation to funded
+  days_to_finalize INT, -- Days from creation to finalized
+  days_sign_to_fund INT, -- Days from signed to funded
 
   -- Metadata
   _source_table STRING,
   _load_timestamp TIMESTAMP
 )
 USING DELTA
-PARTITIONED BY (creation_date_key) -- Partitioning by date key is common for fact tables
+PARTITIONED BY (revenue_recognition_date_key) -- Partitioning by revenue recognition date for accounting periods
 TBLPROPERTIES (
     'delta.autoOptimize.optimizeWrite' = 'true', 
     'delta.autoOptimize.autoCompact' = 'true'
@@ -64,8 +80,8 @@ USING (
   WITH deal_data AS (
     SELECT
       d.id,
-      d.state as deal_state,
-      d.type as deal_type,
+      d.state as deal_state, -- Map bronze 'state' column to 'deal_state' for silver layer
+      d.type as deal_type,   -- Map bronze 'type' column to 'deal_type' for silver layer
       d.customer_id,
       d.creation_date_utc,
       d.completion_date_utc,
@@ -74,6 +90,59 @@ USING (
       ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY d.updated_at DESC) as rn
     FROM bronze.leaseend_db_public.deals d
     WHERE d.id IS NOT NULL AND (d._fivetran_deleted = FALSE OR d._fivetran_deleted IS NULL)
+  ),
+  -- Get minimum created_at from deal_states as fallback for creation_date
+  deal_states_creation_fallback AS (
+    SELECT
+      ds.deal_id,
+      MIN(ds.created_at) as min_created_at
+    FROM bronze.leaseend_db_public.deal_states ds
+    WHERE ds.deal_id IS NOT NULL 
+      AND ds.created_at IS NOT NULL
+      AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+    GROUP BY ds.deal_id
+  ),
+  -- Get revenue recognition date from deal_states where state = 'signed'
+  revenue_recognition_data AS (
+    SELECT
+      ds.deal_id,
+      ds.updated_date_utc as revenue_recognition_date_utc,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+    FROM bronze.leaseend_db_public.deal_states ds
+    WHERE ds.state = 'signed' 
+      AND ds.deal_id IS NOT NULL 
+      AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+  ),
+  -- Get key milestone dates
+  signed_milestone AS (
+    SELECT
+      ds.deal_id,
+      ds.updated_date_utc as signed_date_utc,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+    FROM bronze.leaseend_db_public.deal_states ds
+    WHERE ds.state = 'signed' 
+      AND ds.deal_id IS NOT NULL 
+      AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+  ),
+  funded_milestone AS (
+    SELECT
+      ds.deal_id,
+      ds.updated_date_utc as funded_date_utc,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+    FROM bronze.leaseend_db_public.deal_states ds
+    WHERE ds.state = 'funded' 
+      AND ds.deal_id IS NOT NULL 
+      AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+  ),
+  finalized_milestone AS (
+    SELECT
+      ds.deal_id,
+      ds.updated_date_utc as finalized_date_utc,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+    FROM bronze.leaseend_db_public.deal_states ds
+    WHERE ds.state = 'finalized' 
+      AND ds.deal_id IS NOT NULL 
+      AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
   ),
   car_data AS (
     SELECT
@@ -140,10 +209,29 @@ USING (
     COALESCE(CAST(cd.vin AS STRING), 'Unknown') AS vehicle_key,
     COALESCE(CAST(fd.bank AS STRING), 'No Bank') AS bank_key,
     COALESCE(CAST(fd.option_type AS STRING), 'noProducts') as option_type_key,
-    COALESCE(CAST(DATE_FORMAT(dd.creation_date_utc, 'yyyyMMdd') AS INT), 0) AS creation_date_key,
-    COALESCE(CAST(DATE_FORMAT(dd.creation_date_utc, 'HHmmss') AS INT), 0) AS creation_time_key,
+    -- Use creation_date_utc if available, otherwise fall back to min created_at from deal_states
+    COALESCE(
+      CAST(DATE_FORMAT(dd.creation_date_utc, 'yyyyMMdd') AS INT),
+      CAST(DATE_FORMAT(dscf.min_created_at, 'yyyyMMdd') AS INT),
+      0
+    ) AS creation_date_key,
+    COALESCE(
+      CAST(DATE_FORMAT(dd.creation_date_utc, 'HHmmss') AS INT),
+      CAST(DATE_FORMAT(dscf.min_created_at, 'HHmmss') AS INT),
+      0
+    ) AS creation_time_key,
     COALESCE(CAST(DATE_FORMAT(dd.completion_date_utc, 'yyyyMMdd') AS INT), 0) AS completion_date_key,
     COALESCE(CAST(DATE_FORMAT(dd.completion_date_utc, 'HHmmss') AS INT), 0) AS completion_time_key,
+    COALESCE(CAST(DATE_FORMAT(rrd.revenue_recognition_date_utc, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+    COALESCE(CAST(DATE_FORMAT(rrd.revenue_recognition_date_utc, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+
+    -- Key milestone dates
+    COALESCE(CAST(DATE_FORMAT(sm.signed_date_utc, 'yyyyMMdd') AS INT), 0) AS signed_date_key,
+    COALESCE(CAST(DATE_FORMAT(sm.signed_date_utc, 'HHmmss') AS INT), 0) AS signed_time_key,
+    COALESCE(CAST(DATE_FORMAT(fm.funded_date_utc, 'yyyyMMdd') AS INT), 0) AS funded_date_key,
+    COALESCE(CAST(DATE_FORMAT(fm.funded_date_utc, 'HHmmss') AS INT), 0) AS funded_time_key,
+    COALESCE(CAST(DATE_FORMAT(fim.finalized_date_utc, 'yyyyMMdd') AS INT), 0) AS finalized_date_key,
+    COALESCE(CAST(DATE_FORMAT(fim.finalized_date_utc, 'HHmmss') AS INT), 0) AS finalized_time_key,
 
     -- Measures (multiply currency by 100, rates by 100, cast to BIGINT, use COALESCE to default nulls to zero)
     CAST(COALESCE(fd.amount_financed, 0) * 100 AS BIGINT) as amount_financed_amount,
@@ -177,10 +265,37 @@ USING (
 
     CAST(fd.term AS INT) as term,
     CAST(fd.days_to_payment AS INT) as days_to_payment,
+    
+    -- Process timing measures - use effective creation date (either creation_date_utc or fallback)
+    CASE 
+      WHEN sm.signed_date_utc IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
+      THEN DATEDIFF(sm.signed_date_utc, COALESCE(dd.creation_date_utc, dscf.min_created_at))
+      ELSE NULL
+    END as days_to_sign,
+    CASE 
+      WHEN fm.funded_date_utc IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
+      THEN DATEDIFF(fm.funded_date_utc, COALESCE(dd.creation_date_utc, dscf.min_created_at))
+      ELSE NULL
+    END as days_to_fund,
+    CASE 
+      WHEN fim.finalized_date_utc IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
+      THEN DATEDIFF(fim.finalized_date_utc, COALESCE(dd.creation_date_utc, dscf.min_created_at))
+      ELSE NULL
+    END as days_to_finalize,
+    CASE 
+      WHEN fm.funded_date_utc IS NOT NULL AND sm.signed_date_utc IS NOT NULL
+      THEN DATEDIFF(fm.funded_date_utc, sm.signed_date_utc)
+      ELSE NULL
+    END as days_sign_to_fund,
 
     'bronze.leaseend_db_public.deals' as _source_table
 
   FROM deal_data dd
+  LEFT JOIN deal_states_creation_fallback dscf ON dd.id = dscf.deal_id
+  LEFT JOIN revenue_recognition_data rrd ON dd.id = rrd.deal_id AND rrd.rn = 1
+  LEFT JOIN signed_milestone sm ON dd.id = sm.deal_id AND sm.rn = 1
+  LEFT JOIN funded_milestone fm ON dd.id = fm.deal_id AND fm.rn = 1
+  LEFT JOIN finalized_milestone fim ON dd.id = fim.deal_id AND fim.rn = 1
   LEFT JOIN car_data cd ON dd.id = cd.deal_id AND cd.rn = 1
   LEFT JOIN financial_data fd ON dd.id = fd.deal_id AND fd.rn = 1
   WHERE dd.rn = 1
@@ -203,6 +318,14 @@ WHEN MATCHED THEN
     target.creation_time_key = source.creation_time_key,
     target.completion_date_key = source.completion_date_key,
     target.completion_time_key = source.completion_time_key,
+    target.revenue_recognition_date_key = source.revenue_recognition_date_key,
+    target.revenue_recognition_time_key = source.revenue_recognition_time_key,
+    target.signed_date_key = source.signed_date_key,
+    target.signed_time_key = source.signed_time_key,
+    target.funded_date_key = source.funded_date_key,
+    target.funded_time_key = source.funded_time_key,
+    target.finalized_date_key = source.finalized_date_key,
+    target.finalized_time_key = source.finalized_time_key,
     target.amount_financed_amount = source.amount_financed_amount,
     target.payment_amount = source.payment_amount,
     target.money_down_amount = source.money_down_amount,
@@ -228,6 +351,10 @@ WHEN MATCHED THEN
     target.ally_fees_amount = source.ally_fees_amount,
     target.term = source.term,
     target.days_to_payment = source.days_to_payment,
+    target.days_to_sign = source.days_to_sign,
+    target.days_to_fund = source.days_to_fund,
+    target.days_to_finalize = source.days_to_finalize,
+    target.days_sign_to_fund = source.days_sign_to_fund,
     target._source_table = source._source_table,
     target._load_timestamp = CURRENT_TIMESTAMP()
 
@@ -245,6 +372,14 @@ WHEN NOT MATCHED THEN
     creation_time_key,
     completion_date_key,
     completion_time_key,
+    revenue_recognition_date_key,
+    revenue_recognition_time_key,
+    signed_date_key,
+    signed_time_key,
+    funded_date_key,
+    funded_time_key,
+    finalized_date_key,
+    finalized_time_key,
     amount_financed_amount,
     payment_amount,
     money_down_amount,
@@ -270,6 +405,10 @@ WHEN NOT MATCHED THEN
     ally_fees_amount,
     term,
     days_to_payment,
+    days_to_sign,
+    days_to_fund,
+    days_to_finalize,
+    days_sign_to_fund,
     _source_table,
     _load_timestamp
   )
@@ -285,6 +424,14 @@ WHEN NOT MATCHED THEN
     source.creation_time_key,
     source.completion_date_key,
     source.completion_time_key,
+    source.revenue_recognition_date_key,
+    source.revenue_recognition_time_key,
+    source.signed_date_key,
+    source.signed_time_key,
+    source.funded_date_key,
+    source.funded_time_key,
+    source.finalized_date_key,
+    source.finalized_time_key,
     source.amount_financed_amount,
     source.payment_amount,
     source.money_down_amount,
@@ -310,6 +457,10 @@ WHEN NOT MATCHED THEN
     source.ally_fees_amount,
     source.term,
     source.days_to_payment,
+    source.days_to_sign,
+    source.days_to_fund,
+    source.days_to_finalize,
+    source.days_sign_to_fund,
     source._source_table,
     CURRENT_TIMESTAMP()
-  ); 
+  );

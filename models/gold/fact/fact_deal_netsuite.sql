@@ -1,6 +1,8 @@
 -- models/gold/fact/fact_deal_netsuite.sql
 -- Gold layer deal NetSuite fact table with business enhancements
 -- Now pulls from silver layer instead of big_deal
+
+-- Drop and recreate table to ensure correct schema
 DROP TABLE IF EXISTS gold.finance.fact_deal_netsuite;
 
 CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
@@ -8,6 +10,8 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
   deal_key STRING NOT NULL,
   netsuite_posting_date_key BIGINT,
   netsuite_posting_time_key BIGINT,
+  revenue_recognition_date_key INT,
+  revenue_recognition_time_key INT,
   vin STRING,
   month INT,
   year INT,
@@ -20,7 +24,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
   
   vsc_rev_4110 BIGINT,
   vsc_advance_rev_4110a BIGINT,
-  vsc_volume_bonus_rev_4110b BIGINT,
+  vsc_bonus_rev_4110b BIGINT,
   vsc_cost_rev_4110c BIGINT,
   vsc_chargeback_rev_4111 BIGINT,
   vsc_total_rev BIGINT,
@@ -77,8 +81,8 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
   gross_profit BIGINT,
   gross_margin BIGINT, -- Percentage * 10000
   
-  -- Flags
-  repo BOOLEAN,
+  -- Repo amount (stored as BIGINT cents)
+  repo BIGINT,
   
   -- Source information
   deal_source STRING,
@@ -89,7 +93,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
 )
 USING DELTA
 COMMENT 'Gold layer fact table for NetSuite financial aggregates - mirrors bigdealnscreation.py logic'
-PARTITIONED BY (year, month)
+PARTITIONED BY (revenue_recognition_date_key)
 TBLPROPERTIES (
     'delta.autoOptimize.optimizeWrite' = 'true',
     'delta.autoOptimize.autoCompact' = 'true'
@@ -102,6 +106,8 @@ USING (
     sfn.deal_key,
     sfn.netsuite_posting_date_key,
     sfn.netsuite_posting_time_key,
+    sfn.revenue_recognition_date_key,
+    sfn.revenue_recognition_time_key,
     sfn.vin,
     sfn.month,
     sfn.year,
@@ -114,7 +120,7 @@ USING (
     
     sfn.vsc_rev_4110,
     sfn.vsc_advance_rev_4110a,
-    sfn.vsc_volume_bonus_rev_4110b,
+    sfn.vsc_bonus_rev_4110b,
     sfn.vsc_cost_rev_4110c,
     sfn.vsc_chargeback_rev_4111,
     sfn.vsc_total_rev,
@@ -187,9 +193,17 @@ USING (
 ) AS source
 ON target.deal_key = source.deal_key
 
-WHEN MATCHED THEN
+WHEN MATCHED AND (
+    target.revenue_recognition_date_key != source.revenue_recognition_date_key OR
+    target.netsuite_posting_date_key != source.netsuite_posting_date_key OR
+    target.total_revenue != source.total_revenue OR
+    target.gross_profit != source.gross_profit
+) THEN
   UPDATE SET
+    target.netsuite_posting_date_key = source.netsuite_posting_date_key,
     target.netsuite_posting_time_key = source.netsuite_posting_time_key,
+    target.revenue_recognition_date_key = source.revenue_recognition_date_key,
+    target.revenue_recognition_time_key = source.revenue_recognition_time_key,
     target.vin = source.vin,
     target.month = source.month,
     target.year = source.year,
@@ -199,7 +213,7 @@ WHEN MATCHED THEN
     target.reserve_total_rev = source.reserve_total_rev,
     target.vsc_rev_4110 = source.vsc_rev_4110,
     target.vsc_advance_rev_4110a = source.vsc_advance_rev_4110a,
-    target.vsc_volume_bonus_rev_4110b = source.vsc_volume_bonus_rev_4110b,
+    target.vsc_bonus_rev_4110b = source.vsc_bonus_rev_4110b,
     target.vsc_cost_rev_4110c = source.vsc_cost_rev_4110c,
     target.vsc_chargeback_rev_4111 = source.vsc_chargeback_rev_4111,
     target.vsc_total_rev = source.vsc_total_rev,
@@ -253,6 +267,8 @@ WHEN NOT MATCHED THEN
     deal_key,
     netsuite_posting_date_key,
     netsuite_posting_time_key,
+    revenue_recognition_date_key,
+    revenue_recognition_time_key,
     vin,
     month,
     year,
@@ -262,7 +278,7 @@ WHEN NOT MATCHED THEN
     reserve_total_rev,
     vsc_rev_4110,
     vsc_advance_rev_4110a,
-    vsc_volume_bonus_rev_4110b,
+    vsc_bonus_rev_4110b,
     vsc_cost_rev_4110c,
     vsc_chargeback_rev_4111,
     vsc_total_rev,
@@ -315,6 +331,8 @@ WHEN NOT MATCHED THEN
     source.deal_key,
     source.netsuite_posting_date_key,
     source.netsuite_posting_time_key,
+    source.revenue_recognition_date_key,
+    source.revenue_recognition_time_key,
     source.vin,
     source.month,
     source.year,
@@ -324,7 +342,7 @@ WHEN NOT MATCHED THEN
     source.reserve_total_rev,
     source.vsc_rev_4110,
     source.vsc_advance_rev_4110a,
-    source.vsc_volume_bonus_rev_4110b,
+    source.vsc_bonus_rev_4110b,
     source.vsc_cost_rev_4110c,
     source.vsc_chargeback_rev_4111,
     source.vsc_total_rev,
