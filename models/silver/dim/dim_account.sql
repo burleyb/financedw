@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS silver.finance.dim_account (
   account_full_name STRING, -- Full hierarchical name
   account_type STRING, -- Account type
   account_category STRING, -- Business category classification
-  parent_account_id BIGINT, -- Parent account for hierarchy
+  parent_account_key STRING, -- Parent account key for joins (STRING)
   is_summary BOOLEAN, -- Whether this is a summary account
   is_inactive BOOLEAN, -- Whether the account is inactive
   is_inventory BOOLEAN, -- Whether this is an inventory account
@@ -57,7 +57,10 @@ USING (
       WHEN UPPER(a.accttype) LIKE '%BANK%' THEN 'Bank'
       ELSE 'Other'
     END AS account_category,
-    a.parent AS parent_account_id,
+    CASE 
+      WHEN a.parent IS NOT NULL THEN CAST(a.parent AS STRING)
+      ELSE NULL 
+    END AS parent_account_key, -- Convert parent ID to STRING for joins
     CASE WHEN UPPER(a.issummary) = 'T' THEN TRUE ELSE FALSE END AS is_summary,
     CASE WHEN UPPER(a.isinactive) = 'T' THEN TRUE ELSE FALSE END AS is_inactive,
     CASE WHEN UPPER(a.inventory) = 'T' THEN TRUE ELSE FALSE END AS is_inventory,
@@ -88,7 +91,7 @@ WHEN MATCHED AND (
     target.account_full_name <> source.account_full_name OR
     target.account_type <> source.account_type OR
     target.account_category <> source.account_category OR
-    target.parent_account_id <> source.parent_account_id OR
+    target.parent_account_key <> source.parent_account_key OR
     target.is_summary <> source.is_summary OR
     target.is_inactive <> source.is_inactive OR
     target.is_inventory <> source.is_inventory OR
@@ -110,7 +113,7 @@ WHEN MATCHED AND (
     target.account_full_name = source.account_full_name,
     target.account_type = source.account_type,
     target.account_category = source.account_category,
-    target.parent_account_id = source.parent_account_id,
+    target.parent_account_key = source.parent_account_key,
     target.is_summary = source.is_summary,
     target.is_inactive = source.is_inactive,
     target.is_inventory = source.is_inventory,
@@ -137,7 +140,7 @@ WHEN NOT MATCHED THEN
     account_full_name,
     account_type,
     account_category,
-    parent_account_id,
+    parent_account_key,
     is_summary,
     is_inactive,
     is_inventory,
@@ -162,7 +165,7 @@ WHEN NOT MATCHED THEN
     source.account_full_name,
     source.account_type,
     source.account_category,
-    source.parent_account_id,
+    source.parent_account_key,
     source.is_summary,
     source.is_inactive,
     source.is_inventory,
@@ -183,9 +186,7 @@ WHEN NOT MATCHED THEN
 -- Ensure 'No Account' and 'Unknown' types exist for handling NULLs
 MERGE INTO silver.finance.dim_account AS target
 USING (
-  SELECT 'No Account' as account_key, NULL as account_id, NULL as account_number, 'No Account' as account_name, 'No Account' as account_full_name, 'Other' as account_type, 'Other' as account_category, NULL as parent_account_id, false as is_summary, false as is_inactive, false as is_inventory, 'Default account for null values' as description, NULL as subsidiary, NULL as include_children, NULL as eliminate, NULL as revalue, NULL as reconcile_with_matching, NULL as bank_name, NULL as bank_routing_number, NULL as special_account, NULL as external_id, 'static' as _source_table
-  UNION ALL
-  SELECT 'Unknown' as account_key, NULL as account_id, NULL as account_number, 'Unknown' as account_name, 'Unknown' as account_full_name, 'Other' as account_type, 'Other' as account_category, NULL as parent_account_id, false as is_summary, false as is_inactive, false as is_inventory, 'Default account for unknown values' as description, NULL as subsidiary, NULL as include_children, NULL as eliminate, NULL as revalue, NULL as reconcile_with_matching, NULL as bank_name, NULL as bank_routing_number, NULL as special_account, NULL as external_id, 'static' as _source_table
+  SELECT '0' as account_key, 0 as account_id, NULL as account_number, 'No Account' as account_name, 'No Account' as account_full_name, 'Other' as account_type, 'Other' as account_category, NULL as parent_account_key, false as is_summary, false as is_inactive, false as is_inventory, 'Default account for null values' as description, NULL as subsidiary, NULL as include_children, NULL as eliminate, NULL as revalue, NULL as reconcile_with_matching, NULL as bank_name, NULL as bank_routing_number, NULL as special_account, NULL as external_id, 'static' as _source_table
 ) AS source
 ON target.account_key = source.account_key
 WHEN NOT MATCHED THEN 
@@ -197,7 +198,7 @@ WHEN NOT MATCHED THEN
     account_full_name,
     account_type,
     account_category,
-    parent_account_id,
+    parent_account_key,
     is_summary,
     is_inactive,
     is_inventory,
@@ -222,7 +223,7 @@ WHEN NOT MATCHED THEN
     source.account_full_name,
     source.account_type,
     source.account_category,
-    source.parent_account_id,
+    source.parent_account_key,
     source.is_summary,
     source.is_inactive,
     source.is_inventory,

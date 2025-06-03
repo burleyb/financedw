@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.dim_account (
   account_type STRING,
   account_category STRING,
   account_subcategory STRING,
-  parent_account_id BIGINT,
+  parent_account_key STRING,
   account_hierarchy_level INT,
   account_path STRING,
   is_summary BOOLEAN,
@@ -89,9 +89,9 @@ USING (
         END
       ELSE sa.account_category
     END AS account_subcategory,
-    sa.parent_account_id,
+    sa.parent_account_key,
     -- Calculate hierarchy level (simplified - would need recursive CTE for full hierarchy)
-    CASE WHEN sa.parent_account_id IS NULL THEN 1 ELSE 2 END AS account_hierarchy_level,
+    CASE WHEN sa.parent_account_key IS NULL THEN 1 ELSE 2 END AS account_hierarchy_level,
     -- Create account path (simplified)
     COALESCE(sa.account_full_name, sa.account_name) AS account_path,
     sa.is_summary,
@@ -145,7 +145,7 @@ WHEN MATCHED THEN
     target.account_type = source.account_type,
     target.account_category = source.account_category,
     target.account_subcategory = source.account_subcategory,
-    target.parent_account_id = source.parent_account_id,
+    target.parent_account_key = source.parent_account_key,
     target.account_hierarchy_level = source.account_hierarchy_level,
     target.account_path = source.account_path,
     target.is_summary = source.is_summary,
@@ -178,7 +178,7 @@ WHEN NOT MATCHED THEN
     account_type,
     account_category,
     account_subcategory,
-    parent_account_id,
+    parent_account_key,
     account_hierarchy_level,
     account_path,
     is_summary,
@@ -210,7 +210,7 @@ WHEN NOT MATCHED THEN
     source.account_type,
     source.account_category,
     source.account_subcategory,
-    source.parent_account_id,
+    source.parent_account_key,
     source.account_hierarchy_level,
     source.account_path,
     source.is_summary,
