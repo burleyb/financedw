@@ -1,7 +1,7 @@
 -- models/silver/fact/fact_deals.sql
 DROP TABLE silver.finance.fact_deals ;
 -- Primary deals fact table sourced from bronze tables
-
+ 
 -- 1. Create the table if it doesn't exist
 CREATE TABLE IF NOT EXISTS silver.finance.fact_deals (
   -- Keys
@@ -87,7 +87,7 @@ USING (
       d.completion_date_utc,
       d.source,
       d.updated_at,
-      ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY d.updated_at DESC) as rn
+      ROW_NUMBER() OVER (PARTITION BY d.id ORDER BY d.updated_at ASC) as rn
     FROM bronze.leaseend_db_public.deals d
     WHERE d.id IS NOT NULL AND (d._fivetran_deleted = FALSE OR d._fivetran_deleted IS NULL)
   ),
@@ -102,14 +102,16 @@ USING (
       AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
     GROUP BY ds.deal_id
   ),
-  -- Get revenue recognition date from deal_states where state = 'signed'
+  -- Get revenue recognition date from deal_states where state = 'funded'
+  -- Convert from UTC to Mountain Time to match NetSuite
   revenue_recognition_data AS (
     SELECT
       ds.deal_id,
       ds.updated_date_utc as revenue_recognition_date_utc,
-      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+      from_utc_timestamp(ds.updated_date_utc, 'America/Denver') as revenue_recognition_date_mt,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc DESC) as rn
     FROM bronze.leaseend_db_public.deal_states ds
-    WHERE ds.state = 'signed' 
+    WHERE ds.state = 'funded' 
       AND ds.deal_id IS NOT NULL 
       AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
   ),
@@ -117,8 +119,8 @@ USING (
   signed_milestone AS (
     SELECT
       ds.deal_id,
-      ds.updated_date_utc as signed_date_utc,
-      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+      from_utc_timestamp(ds.updated_date_utc, 'America/Denver') as signed_date_mt,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc DESC) as rn
     FROM bronze.leaseend_db_public.deal_states ds
     WHERE ds.state = 'signed' 
       AND ds.deal_id IS NOT NULL 
@@ -127,8 +129,8 @@ USING (
   funded_milestone AS (
     SELECT
       ds.deal_id,
-      ds.updated_date_utc as funded_date_utc,
-      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+      from_utc_timestamp(ds.updated_date_utc, 'America/Denver') as funded_date_mt,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc DESC) as rn
     FROM bronze.leaseend_db_public.deal_states ds
     WHERE ds.state = 'funded' 
       AND ds.deal_id IS NOT NULL 
@@ -137,8 +139,8 @@ USING (
   finalized_milestone AS (
     SELECT
       ds.deal_id,
-      ds.updated_date_utc as finalized_date_utc,
-      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
+      from_utc_timestamp(ds.updated_date_utc, 'America/Denver') as finalized_date_mt,
+      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc DESC) as rn
     FROM bronze.leaseend_db_public.deal_states ds
     WHERE ds.state = 'finalized' 
       AND ds.deal_id IS NOT NULL 
@@ -222,16 +224,16 @@ USING (
     ) AS creation_time_key,
     COALESCE(CAST(DATE_FORMAT(dd.completion_date_utc, 'yyyyMMdd') AS INT), 0) AS completion_date_key,
     COALESCE(CAST(DATE_FORMAT(dd.completion_date_utc, 'HHmmss') AS INT), 0) AS completion_time_key,
-    COALESCE(CAST(DATE_FORMAT(rrd.revenue_recognition_date_utc, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-    COALESCE(CAST(DATE_FORMAT(rrd.revenue_recognition_date_utc, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+    COALESCE(CAST(DATE_FORMAT(rrd.revenue_recognition_date_mt, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+    COALESCE(CAST(DATE_FORMAT(rrd.revenue_recognition_date_mt, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
 
     -- Key milestone dates
-    COALESCE(CAST(DATE_FORMAT(sm.signed_date_utc, 'yyyyMMdd') AS INT), 0) AS signed_date_key,
-    COALESCE(CAST(DATE_FORMAT(sm.signed_date_utc, 'HHmmss') AS INT), 0) AS signed_time_key,
-    COALESCE(CAST(DATE_FORMAT(fm.funded_date_utc, 'yyyyMMdd') AS INT), 0) AS funded_date_key,
-    COALESCE(CAST(DATE_FORMAT(fm.funded_date_utc, 'HHmmss') AS INT), 0) AS funded_time_key,
-    COALESCE(CAST(DATE_FORMAT(fim.finalized_date_utc, 'yyyyMMdd') AS INT), 0) AS finalized_date_key,
-    COALESCE(CAST(DATE_FORMAT(fim.finalized_date_utc, 'HHmmss') AS INT), 0) AS finalized_time_key,
+    COALESCE(CAST(DATE_FORMAT(sm.signed_date_mt, 'yyyyMMdd') AS INT), 0) AS signed_date_key,
+    COALESCE(CAST(DATE_FORMAT(sm.signed_date_mt, 'HHmmss') AS INT), 0) AS signed_time_key,
+    COALESCE(CAST(DATE_FORMAT(fm.funded_date_mt, 'yyyyMMdd') AS INT), 0) AS funded_date_key,
+    COALESCE(CAST(DATE_FORMAT(fm.funded_date_mt, 'HHmmss') AS INT), 0) AS funded_time_key,
+    COALESCE(CAST(DATE_FORMAT(fim.finalized_date_mt, 'yyyyMMdd') AS INT), 0) AS finalized_date_key,
+    COALESCE(CAST(DATE_FORMAT(fim.finalized_date_mt, 'HHmmss') AS INT), 0) AS finalized_time_key,
 
     -- Measures (multiply currency by 100, rates by 100, cast to BIGINT, use COALESCE to default nulls to zero)
     CAST(COALESCE(fd.amount_financed, 0) * 100 AS BIGINT) as amount_financed_amount,
@@ -268,23 +270,23 @@ USING (
     
     -- Process timing measures - use effective creation date (either creation_date_utc or fallback)
     CASE 
-      WHEN sm.signed_date_utc IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
-      THEN DATEDIFF(sm.signed_date_utc, COALESCE(dd.creation_date_utc, dscf.min_created_at))
+      WHEN sm.signed_date_mt IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
+      THEN DATEDIFF(sm.signed_date_mt, COALESCE(dd.creation_date_utc, dscf.min_created_at))
       ELSE NULL
     END as days_to_sign,
     CASE 
-      WHEN fm.funded_date_utc IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
-      THEN DATEDIFF(fm.funded_date_utc, COALESCE(dd.creation_date_utc, dscf.min_created_at))
+      WHEN fm.funded_date_mt IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
+      THEN DATEDIFF(fm.funded_date_mt, COALESCE(dd.creation_date_utc, dscf.min_created_at))
       ELSE NULL
     END as days_to_fund,
     CASE 
-      WHEN fim.finalized_date_utc IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
-      THEN DATEDIFF(fim.finalized_date_utc, COALESCE(dd.creation_date_utc, dscf.min_created_at))
+      WHEN fim.finalized_date_mt IS NOT NULL AND COALESCE(dd.creation_date_utc, dscf.min_created_at) IS NOT NULL
+      THEN DATEDIFF(fim.finalized_date_mt, COALESCE(dd.creation_date_utc, dscf.min_created_at))
       ELSE NULL
     END as days_to_finalize,
     CASE 
-      WHEN fm.funded_date_utc IS NOT NULL AND sm.signed_date_utc IS NOT NULL
-      THEN DATEDIFF(fm.funded_date_utc, sm.signed_date_utc)
+      WHEN fm.funded_date_mt IS NOT NULL AND sm.signed_date_mt IS NOT NULL
+      THEN DATEDIFF(fm.funded_date_mt, sm.signed_date_mt)
       ELSE NULL
     END as days_sign_to_fund,
 

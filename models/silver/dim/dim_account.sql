@@ -47,14 +47,43 @@ USING (
     COALESCE(a.accountsearchdisplayname, a.fullname, 'Unknown Account') AS account_name,
     a.fullname AS account_full_name,
     a.accttype AS account_type,
-    -- Categorize accounts based on type patterns
+    -- Categorize accounts based on official NetSuite account type mappings
     CASE
-      WHEN UPPER(a.accttype) LIKE '%ASSET%' THEN 'Assets'
-      WHEN UPPER(a.accttype) LIKE '%LIABILITY%' THEN 'Liabilities'
-      WHEN UPPER(a.accttype) LIKE '%EQUITY%' THEN 'Equity'
-      WHEN UPPER(a.accttype) LIKE '%INCOME%' OR UPPER(a.accttype) LIKE '%REVENUE%' THEN 'Revenue'
-      WHEN UPPER(a.accttype) LIKE '%EXPENSE%' OR UPPER(a.accttype) LIKE '%COST%' THEN 'Expenses'
-      WHEN UPPER(a.accttype) LIKE '%BANK%' THEN 'Bank'
+      -- Asset accounts (Balance Sheet)
+      WHEN UPPER(a.accttype) IN ('BANK', 'BANK-BANK') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('ACCREC', 'ACCTSRECEIVABLE', 'ACCOUNTSRECEIVABLE') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('INVENTORY') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('OTHCURRASSET', 'OTHERCURRENTASSET', 'OTHERCURRENTASSETS') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('FIXEDASSET', 'FIXEDASSETS') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('ACCUMDEPRECIATION', 'ACCUMDEPREC') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('OTHERASSET', 'OTHERASSETS') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('DEFERREDEXPENSE', 'DEFEREXPENSE') THEN 'Assets'
+      WHEN UPPER(a.accttype) IN ('UNBILLEDRECEIVABLE', 'UNBILLEDREC') THEN 'Assets'
+      
+      -- Liability accounts (Balance Sheet)
+      WHEN UPPER(a.accttype) IN ('ACCTSPAY', 'ACCOUNTSPAYABLE') THEN 'Liabilities'
+      WHEN UPPER(a.accttype) IN ('CREDITCARD') THEN 'Liabilities'
+      WHEN UPPER(a.accttype) IN ('OTHCURRLIAB', 'OTHERCURRENTLIABILITY', 'OTHERCURRENTLIABILITIES') THEN 'Liabilities'
+      WHEN UPPER(a.accttype) IN ('LONGTERMLIAB', 'LONGTERMLIABILITY', 'LONGTERMLABILITIES') THEN 'Liabilities'
+      WHEN UPPER(a.accttype) IN ('DEFERREDREVENUE', 'DEFERREVENUE') THEN 'Liabilities'
+      
+      -- Equity accounts (Balance Sheet)
+      WHEN UPPER(a.accttype) IN ('EQUITY', 'EQUITY-NOCLOSE', 'EQUITYNOCLOSE') THEN 'Equity'
+      WHEN UPPER(a.accttype) IN ('RETEARNINGS', 'RETAINEDEARNINGS') THEN 'Equity'
+      WHEN UPPER(a.accttype) IN ('EQUITY-CLOSES', 'EQUITYCLOSES') THEN 'Equity'
+      
+      -- Income/Revenue accounts (Income Statement)
+      WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE') THEN 'Revenue'
+      WHEN UPPER(a.accttype) IN ('OTHERINCOME', 'OTHINCOME') THEN 'Revenue'
+      
+      -- Expense accounts (Income Statement)
+      WHEN UPPER(a.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'Expenses'
+      WHEN UPPER(a.accttype) IN ('EXPENSE') THEN 'Expenses'
+      WHEN UPPER(a.accttype) IN ('OTHEREXPENSE', 'OTHEXPENSE') THEN 'Expenses'
+      
+      -- Special account types
+      WHEN UPPER(a.accttype) IN ('STATISTICAL') THEN 'Statistical'
+      
       ELSE 'Other'
     END AS account_category,
     CASE 
