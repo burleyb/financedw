@@ -12,6 +12,11 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_payoff (
   payoff_date_key INT,
   payoff_time_key INT,
   
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   -- Financial measures (in cents)
   payoff_amount_cents BIGINT,
   payoff_amount_dollars DECIMAL(15,2),
@@ -30,6 +35,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_payoff (
   payoff_size_category STRING,
   payoff_urgency STRING,
   
+  -- Metadata
   _source_table STRING,
   _load_timestamp TIMESTAMP
 )
@@ -87,7 +93,13 @@ USING (
       ELSE 'Unknown'
     END AS payoff_urgency,
     
-    sfp._source_table,
+    -- Metadata
+    'silver.finance.fact_deal_payoff' as _source_table,
+    
+    -- Credit memo flags
+    sfp.has_credit_memo,
+    sfp.credit_memo_date_key,
+    sfp.credit_memo_time_key,
     CURRENT_TIMESTAMP() AS _load_timestamp
   FROM silver.finance.fact_deal_payoff sfp
 ) AS source
@@ -115,7 +127,10 @@ WHEN MATCHED THEN
     target.payoff_size_category = source.payoff_size_category,
     target.payoff_urgency = source.payoff_urgency,
     target._source_table = source._source_table,
-    target._load_timestamp = source._load_timestamp
+    target._load_timestamp = source._load_timestamp,
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 WHEN NOT MATCHED THEN
   INSERT *
@@ -142,5 +157,8 @@ WHEN NOT MATCHED THEN
     source.payoff_size_category,
     source.payoff_urgency,
     source._source_table,
-    source._load_timestamp
+    source._load_timestamp,
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   ); 

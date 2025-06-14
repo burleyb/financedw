@@ -9,6 +9,11 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deal_payoff (
   payoff_time_key INT, -- FK to dim_time
   payoff_good_through_date_key INT, -- FK to dim_date
 
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+
   -- Measures (Stored as BIGINT cents)
   vehicle_payoff_amount BIGINT,
   estimated_payoff_amount BIGINT,
@@ -53,6 +58,22 @@ USING (
            OR d.estimated_payoff IS NOT NULL 
            OR d.user_entered_total_payoff IS NOT NULL 
            OR d.vehicle_cost IS NOT NULL)
+  ),
+  car_data AS (
+    SELECT
+      c.deal_id,
+      UPPER(c.vin) as vin
+    FROM bronze.leaseend_db_public.cars c
+    WHERE c.deal_id IS NOT NULL AND c.vin IS NOT NULL
+  ),
+  credit_memo_vins AS (
+    SELECT UPPER(t.custbody_leaseend_vinno) AS vin, MIN(DATE(t.trandate)) AS credit_memo_date
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'CREDITMEMO'
+      AND t.custbody_leaseend_vinno IS NOT NULL
+      AND LENGTH(t.custbody_leaseend_vinno) = 17
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+    GROUP BY UPPER(t.custbody_leaseend_vinno)
   )
   SELECT DISTINCT
     CAST(dd.id AS STRING) AS deal_key,
@@ -79,9 +100,15 @@ USING (
     CAST(COALESCE(dd.user_entered_total_payoff, 0) * 100 AS BIGINT) AS user_entered_total_payoff_amount,
     CAST(COALESCE(dd.vehicle_cost, 0) * 100 AS BIGINT) AS vehicle_cost_amount,
 
-    'bronze.leaseend_db_public.deals' as _source_table
+    'bronze.leaseend_db_public.deals' as _source_table,
+
+    CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
 
   FROM deal_data dd
+  LEFT JOIN car_data cd ON dd.id = cd.deal_id
+  LEFT JOIN credit_memo_vins cmv ON cd.vin = cmv.vin
   WHERE dd.rn = 1
     AND dd.deal_state IS NOT NULL 
     AND dd.id != 0
@@ -108,7 +135,10 @@ WHEN MATCHED AND (
     target.user_entered_total_payoff_amount = source.user_entered_total_payoff_amount,
     target.vehicle_cost_amount = source.vehicle_cost_amount,
     target._source_table = source._source_table,
-    target._load_timestamp = CURRENT_TIMESTAMP()
+    target._load_timestamp = CURRENT_TIMESTAMP(),
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 -- Insert new payoff records
 WHEN NOT MATCHED THEN
@@ -123,7 +153,10 @@ WHEN NOT MATCHED THEN
     user_entered_total_payoff_amount,
     vehicle_cost_amount,
     _source_table,
-    _load_timestamp
+    _load_timestamp,
+    has_credit_memo,
+    credit_memo_date_key,
+    credit_memo_time_key
   )
   VALUES (
     source.deal_key,
@@ -136,5 +169,8 @@ WHEN NOT MATCHED THEN
     source.user_entered_total_payoff_amount,
     source.vehicle_cost_amount,
     source._source_table,
-    CURRENT_TIMESTAMP()
+    CURRENT_TIMESTAMP(),
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   ); 

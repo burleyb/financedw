@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deal_commissions (
   commission_date_key INT, -- FK to dim_date (likely completion date)
   commission_time_key INT, -- FK to dim_time (likely completion time)
 
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+
   -- Measures (Stored as BIGINT cents)
   setter_commission_amount BIGINT,
   closer_commission_amount BIGINT,
@@ -61,6 +66,22 @@ USING (
       AND (fi.setter_commission IS NOT NULL 
            OR fi.closer_commission IS NOT NULL 
            OR fi.commissionable_gross_revenue IS NOT NULL)
+  ),
+  car_data AS (
+    SELECT
+      c.deal_id,
+      UPPER(c.vin) as vin
+    FROM bronze.leaseend_db_public.cars c
+    WHERE c.deal_id IS NOT NULL AND c.vin IS NOT NULL
+  ),
+  credit_memo_vins AS (
+    SELECT UPPER(t.custbody_leaseend_vinno) AS vin, MIN(DATE(t.trandate)) AS credit_memo_date
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'CREDITMEMO'
+      AND t.custbody_leaseend_vinno IS NOT NULL
+      AND LENGTH(t.custbody_leaseend_vinno) = 17
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+    GROUP BY UPPER(t.custbody_leaseend_vinno)
   )
   SELECT DISTINCT
     CAST(dd.id AS STRING) AS deal_key,
@@ -94,10 +115,16 @@ USING (
     ) AS closer2_commission_amount,
     CAST(COALESCE(fd.commissionable_gross_revenue, 0) * 100 AS BIGINT) AS commissionable_gross_revenue_amount,
 
-    'bronze.leaseend_db_public.deals JOIN bronze.leaseend_db_public.financial_infos' as _source_table
+    'bronze.leaseend_db_public.deals JOIN bronze.leaseend_db_public.financial_infos' as _source_table,
+
+    CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
 
   FROM deal_data dd
   LEFT JOIN financial_data fd ON dd.id = fd.deal_id AND fd.rn = 1
+  LEFT JOIN car_data cd ON dd.id = cd.deal_id
+  LEFT JOIN credit_memo_vins cmv ON cd.vin = cmv.vin
   WHERE dd.rn = 1
     AND dd.deal_state IS NOT NULL 
     AND dd.id != 0
@@ -126,7 +153,10 @@ WHEN MATCHED AND (
     target.closer2_commission_amount = source.closer2_commission_amount,
     target.commissionable_gross_revenue_amount = source.commissionable_gross_revenue_amount,
     target._source_table = source._source_table,
-    target._load_timestamp = CURRENT_TIMESTAMP()
+    target._load_timestamp = CURRENT_TIMESTAMP(),
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 -- Insert new commission records
 WHEN NOT MATCHED THEN
@@ -142,7 +172,10 @@ WHEN NOT MATCHED THEN
     closer2_commission_amount,
     commissionable_gross_revenue_amount,
     _source_table,
-    _load_timestamp
+    _load_timestamp,
+    has_credit_memo,
+    credit_memo_date_key,
+    credit_memo_time_key
   )
   VALUES (
     source.deal_key,
@@ -156,5 +189,8 @@ WHEN NOT MATCHED THEN
     source.closer2_commission_amount,
     source.commissionable_gross_revenue_amount,
     source._source_table,
-    CURRENT_TIMESTAMP()
+    CURRENT_TIMESTAMP(),
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   ); 

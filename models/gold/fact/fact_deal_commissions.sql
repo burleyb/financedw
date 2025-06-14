@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_commissions (
   commission_date_key INT,
   commission_time_key INT,
   
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   -- Commission measures (in cents)
   setter_commission_cents BIGINT,
   setter_commission_dollars DECIMAL(15,2),
@@ -34,6 +39,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_commissions (
   performance_category STRING,
   is_split_commission BOOLEAN,
   
+  -- Metadata
   _source_table STRING,
   _load_timestamp TIMESTAMP
 )
@@ -102,7 +108,14 @@ USING (
       ELSE FALSE
     END AS is_split_commission,
     
-    sfc._source_table,
+    -- Metadata
+    'silver.finance.fact_deal_commissions' as _source_table,
+    
+    -- Credit memo flags
+    sfc.has_credit_memo,
+    sfc.credit_memo_date_key,
+    sfc.credit_memo_time_key,
+    
     CURRENT_TIMESTAMP() AS _load_timestamp
   FROM silver.finance.fact_deal_commissions sfc
 ) AS source
@@ -134,7 +147,10 @@ WHEN MATCHED THEN
     target.performance_category = source.performance_category,
     target.is_split_commission = source.is_split_commission,
     target._source_table = source._source_table,
-    target._load_timestamp = source._load_timestamp
+    target._load_timestamp = source._load_timestamp,
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 WHEN NOT MATCHED THEN
   INSERT *
@@ -165,5 +181,8 @@ WHEN NOT MATCHED THEN
     source.performance_category,
     source.is_split_commission,
     source._source_table,
-    source._load_timestamp
+    source._load_timestamp,
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   ); 

@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deals (
   revenue_recognition_date_key INT, -- FK to dim_date - based on 'signed' state
   revenue_recognition_time_key INT, -- FK to dim_time - based on 'signed' state
   
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   -- Additional Key Milestone Dates from deal_states
   signed_date_key INT, -- When deal was signed (revenue recognition)
   signed_time_key INT,
@@ -102,18 +107,20 @@ USING (
       AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
     GROUP BY ds.deal_id
   ),
-  -- Get revenue recognition date from deal_states where state = 'funded'
-  -- Convert from UTC to Mountain Time to match NetSuite
+  -- Get revenue recognition date from NetSuite first sales order date instead of deal_states
+  -- Convert from UTC to Mountain Time to match existing timezone handling
   revenue_recognition_data AS (
     SELECT
-      ds.deal_id,
-      ds.updated_date_utc as revenue_recognition_date_utc,
-      from_utc_timestamp(ds.updated_date_utc, 'America/Denver') as revenue_recognition_date_mt,
-      ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc DESC) as rn
-    FROM bronze.leaseend_db_public.deal_states ds
-    WHERE ds.state = 'funded' 
-      AND ds.deal_id IS NOT NULL 
-      AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+      t.custbody_le_deal_id as deal_id,
+      t.trandate as revenue_recognition_date_utc,
+      from_utc_timestamp(t.trandate, 'America/Denver') as revenue_recognition_date_mt,
+      ROW_NUMBER() OVER (PARTITION BY t.custbody_le_deal_id ORDER BY t.trandate ASC, t.createddate ASC) as rn
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'SALESORD'  -- Sales orders only
+      AND t.custbody_le_deal_id IS NOT NULL 
+      AND t.trandate IS NOT NULL
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
   ),
   -- Get key milestone dates
   signed_milestone AS (
@@ -202,6 +209,16 @@ USING (
       ROW_NUMBER() OVER (PARTITION BY fi.deal_id ORDER BY fi.updated_at DESC) as rn
     FROM bronze.leaseend_db_public.financial_infos fi
     WHERE fi.deal_id IS NOT NULL
+  ),
+  -- Add CTE for credit memo VINs
+  credit_memo_vins AS (
+    SELECT UPPER(t.custbody_leaseend_vinno) AS vin, MIN(DATE(t.trandate)) AS credit_memo_date
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'CREDITMEMO'
+      AND t.custbody_leaseend_vinno IS NOT NULL
+      AND LENGTH(t.custbody_leaseend_vinno) = 17
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+    GROUP BY UPPER(t.custbody_leaseend_vinno)
   )
   SELECT DISTINCT
     CAST(dd.id AS STRING) AS deal_key,
@@ -290,7 +307,12 @@ USING (
       ELSE NULL
     END as days_sign_to_fund,
 
-    'bronze.leaseend_db_public.deals' as _source_table
+    'bronze.leaseend_db_public.deals' as _source_table,
+
+    -- Add credit memo flags
+    CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+    CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT) AS credit_memo_date_key,
+    CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT) AS credit_memo_time_key
 
   FROM deal_data dd
   LEFT JOIN deal_states_creation_fallback dscf ON dd.id = dscf.deal_id
@@ -300,6 +322,7 @@ USING (
   LEFT JOIN finalized_milestone fim ON dd.id = fim.deal_id AND fim.rn = 1
   LEFT JOIN car_data cd ON dd.id = cd.deal_id AND cd.rn = 1
   LEFT JOIN financial_data fd ON dd.id = fd.deal_id AND fd.rn = 1
+  LEFT JOIN credit_memo_vins cmv ON cd.vin = cmv.vin
   WHERE dd.rn = 1
     AND dd.deal_state IS NOT NULL 
     AND dd.id != 0
@@ -358,7 +381,10 @@ WHEN MATCHED THEN
     target.days_to_finalize = source.days_to_finalize,
     target.days_sign_to_fund = source.days_sign_to_fund,
     target._source_table = source._source_table,
-    target._load_timestamp = CURRENT_TIMESTAMP()
+    target._load_timestamp = CURRENT_TIMESTAMP(),
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 -- Insert new deals
 WHEN NOT MATCHED THEN
@@ -412,7 +438,10 @@ WHEN NOT MATCHED THEN
     days_to_finalize,
     days_sign_to_fund,
     _source_table,
-    _load_timestamp
+    _load_timestamp,
+    has_credit_memo,
+    credit_memo_date_key,
+    credit_memo_time_key
   )
   VALUES (
     source.deal_key,
@@ -464,5 +493,8 @@ WHEN NOT MATCHED THEN
     source.days_to_finalize,
     source.days_sign_to_fund,
     source._source_table,
-    CURRENT_TIMESTAMP()
+    CURRENT_TIMESTAMP(),
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   );

@@ -11,6 +11,12 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deal_netsuite (
   netsuite_posting_time_key BIGINT,
   revenue_recognition_date_key INT,
   revenue_recognition_time_key INT,
+  
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   vin STRING,
   month INT,
   year INT,
@@ -87,17 +93,19 @@ MERGE INTO silver.finance.fact_deal_netsuite AS target
 USING (
   WITH revenue_recognition_data AS (
     SELECT
-        ds.deal_id,
-        from_utc_timestamp(ds.updated_date_utc, 'America/Denver') as revenue_recognition_date_mt,
-        DATE_FORMAT(from_utc_timestamp(ds.updated_date_utc, 'America/Denver'), 'yyyy-MM') as revenue_recognition_period,
-        YEAR(from_utc_timestamp(ds.updated_date_utc, 'America/Denver')) as revenue_recognition_year,
-        MONTH(from_utc_timestamp(ds.updated_date_utc, 'America/Denver')) as revenue_recognition_month,
-        QUARTER(from_utc_timestamp(ds.updated_date_utc, 'America/Denver')) as revenue_recognition_quarter,
-        ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
-    FROM bronze.leaseend_db_public.deal_states ds
-    WHERE ds.state = 'funded' 
-        AND ds.deal_id IS NOT NULL 
-        AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+        t.custbody_le_deal_id as deal_id,
+        from_utc_timestamp(t.trandate, 'America/Denver') as revenue_recognition_date_mt,
+        DATE_FORMAT(from_utc_timestamp(t.trandate, 'America/Denver'), 'yyyy-MM') as revenue_recognition_period,
+        YEAR(from_utc_timestamp(t.trandate, 'America/Denver')) as revenue_recognition_year,
+        MONTH(from_utc_timestamp(t.trandate, 'America/Denver')) as revenue_recognition_month,
+        QUARTER(from_utc_timestamp(t.trandate, 'America/Denver')) as revenue_recognition_quarter,
+        ROW_NUMBER() OVER (PARTITION BY t.custbody_le_deal_id ORDER BY t.trandate ASC, t.createddate ASC) as rn
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'SALESORD'  -- Sales orders only
+        AND t.custbody_le_deal_id IS NOT NULL 
+        AND t.trandate IS NOT NULL
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
   ),
   deal_vins AS (
     SELECT DISTINCT
@@ -108,6 +116,16 @@ USING (
         AND LENGTH(c.vin) = 17
         AND c.deal_id IS NOT NULL
         AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+  ),
+  
+  credit_memo_vins AS (
+    SELECT UPPER(t.custbody_leaseend_vinno) AS vin, MIN(DATE(t.trandate)) AS credit_memo_date
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'CREDITMEMO'
+      AND t.custbody_leaseend_vinno IS NOT NULL
+      AND LENGTH(t.custbody_leaseend_vinno) = 17
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+    GROUP BY UPPER(t.custbody_leaseend_vinno)
   ),
   
   revenue_recognition_with_vins AS (
@@ -121,6 +139,7 @@ USING (
         dv.vin
     FROM revenue_recognition_data frr
     INNER JOIN deal_vins dv ON frr.deal_id = dv.deal_id
+    LEFT JOIN credit_memo_vins cmv ON dv.vin = cmv.vin
     WHERE frr.rn = 1
   ),
   
@@ -926,6 +945,9 @@ USING (
     CAST(0 AS BIGINT) AS gross_margin, -- Calculate as percentage later if needed
     CAST(ROUND(COALESCE(vmra.total_amount, 0) * 100) AS BIGINT) AS repo,
     'netsuite' AS deal_source,
+          CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
     
     'bronze.ns.salesinvoiced' as _source_table,
     CURRENT_TIMESTAMP() AS _load_timestamp
@@ -951,6 +973,7 @@ USING (
   LEFT JOIN vin_matching_gap_cor vmgc ON aa.vin = vmgc.vin
   LEFT JOIN vin_matching_gap_advance_expense vmgae ON aa.vin = vmgae.vin
   LEFT JOIN vin_matching_repo_amount vmra ON aa.vin = vmra.vin
+  LEFT JOIN credit_memo_vins cmv ON aa.vin = cmv.vin
 
 ) AS source
 ON target.deal_key = source.deal_key AND target.vin = source.vin
@@ -1015,6 +1038,9 @@ WHEN MATCHED THEN
     target.gross_margin = source.gross_margin,
     target.repo = source.repo,
     target.deal_source = source.deal_source,
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key,
     target._load_timestamp = source._load_timestamp
 
 WHEN NOT MATCHED THEN
@@ -1031,6 +1057,7 @@ WHEN NOT MATCHED THEN
     payoff_variance_total, postage_5510, bank_buyout_fees_5520, other_cor_total,
     vsc_cor_5110, vsc_advance_5110a, vsc_total, gap_cor_5120, gap_advance_5120a, gap_total,
     titling_fees_5141, cor_total, gross_profit, gross_margin, repo, deal_source,
+    has_credit_memo, credit_memo_date_key, credit_memo_time_key,
     _source_table, _load_timestamp
   )
   VALUES (
@@ -1046,6 +1073,7 @@ WHEN NOT MATCHED THEN
     source.payoff_variance_total, source.postage_5510, source.bank_buyout_fees_5520, source.other_cor_total,
     source.vsc_cor_5110, source.vsc_advance_5110a, source.vsc_total, source.gap_cor_5120, source.gap_advance_5120a, source.gap_total,
     source.titling_fees_5141, source.cor_total, source.gross_profit, source.gross_margin, source.repo, source.deal_source,
+    source.has_credit_memo, source.credit_memo_date_key, source.credit_memo_time_key,
     source._source_table, source._load_timestamp
   ); 
   

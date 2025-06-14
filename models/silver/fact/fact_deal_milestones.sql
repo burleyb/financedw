@@ -12,6 +12,11 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deal_milestones (
   deal_state_key STRING, -- FK to dim_deal_state
   user_key STRING, -- FK to dim_user (who triggered the state change)
   
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   -- Milestone Classification
   milestone_category STRING, -- initiation, processing, completion, cancellation
   milestone_order INT, -- Workflow sequence order
@@ -66,6 +71,23 @@ USING (
       AND ds.state IS NOT NULL
       AND ds.updated_date_utc IS NOT NULL
       AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+  ),
+  
+  car_data AS (
+    SELECT
+      c.deal_id,
+      UPPER(c.vin) as vin
+    FROM bronze.leaseend_db_public.cars c
+    WHERE c.deal_id IS NOT NULL AND c.vin IS NOT NULL
+  ),
+  credit_memo_vins AS (
+    SELECT UPPER(t.custbody_leaseend_vinno) AS vin, MIN(DATE(t.trandate)) AS credit_memo_date
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'CREDITMEMO'
+      AND t.custbody_leaseend_vinno IS NOT NULL
+      AND LENGTH(t.custbody_leaseend_vinno) = 17
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+    GROUP BY UPPER(t.custbody_leaseend_vinno)
   )
   
   SELECT
@@ -135,10 +157,16 @@ USING (
     CASE WHEN dst.deal_state_key IN ('finalized', 'closed', 'funded') THEN true ELSE false END as is_completion_milestone,
     CASE WHEN dst.deal_state_key IN ('booted', 'cancelled', 'declined') THEN true ELSE false END as is_cancellation_milestone,
     
+    CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+    CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT) AS credit_memo_date_key,
+    CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT) AS credit_memo_time_key,
+    
     'bronze.leaseend_db_public.deal_states' as _source_table
     
   FROM deal_state_transitions dst
   LEFT JOIN deal_creation_dates dcd ON dst.deal_key = dcd.deal_id
+  LEFT JOIN car_data cd ON dst.deal_key = cd.deal_id
+  LEFT JOIN credit_memo_vins cmv ON cd.vin = cmv.vin
   WHERE dst.rn = 1 -- Only take the latest record for each unique combination
 
 ) AS source
@@ -165,6 +193,9 @@ WHEN MATCHED AND (
     target.is_revenue_milestone = source.is_revenue_milestone,
     target.is_completion_milestone = source.is_completion_milestone,
     target.is_cancellation_milestone = source.is_cancellation_milestone,
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key,
     target._source_table = source._source_table,
     target._load_timestamp = CURRENT_TIMESTAMP()
 
@@ -185,6 +216,9 @@ WHEN NOT MATCHED THEN
     is_revenue_milestone,
     is_completion_milestone,
     is_cancellation_milestone,
+    has_credit_memo,
+    credit_memo_date_key,
+    credit_memo_time_key,
     _source_table,
     _load_timestamp
   )
@@ -203,6 +237,9 @@ WHEN NOT MATCHED THEN
     source.is_revenue_milestone,
     source.is_completion_milestone,
     source.is_cancellation_milestone,
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key,
     source._source_table,
     CURRENT_TIMESTAMP()
   ); 

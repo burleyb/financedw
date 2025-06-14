@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deals (
   revenue_recognition_date_key INT, -- FK to dim_date - based on 'signed' state
   revenue_recognition_time_key INT, -- FK to dim_time - based on 'signed' state
   
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   -- Additional Key Milestone Dates from deal_states
   signed_date_key INT, -- When deal was signed (revenue recognition)
   signed_time_key INT,
@@ -146,7 +151,12 @@ USING (
     fd.days_sign_to_fund,
     
     -- Metadata
-    'silver.finance.fact_deals' as _source_table
+    'silver.finance.fact_deals' as _source_table,
+    
+    -- Credit memo flags
+    fd.has_credit_memo,
+    fd.credit_memo_date_key,
+    fd.credit_memo_time_key
     
   FROM silver.finance.fact_deals fd
   WHERE fd.deal_key IS NOT NULL
@@ -221,7 +231,10 @@ WHEN MATCHED AND (
     target.days_to_finalize = source.days_to_finalize,
     target.days_sign_to_fund = source.days_sign_to_fund,
     target._source_table = source._source_table,
-    target._load_timestamp = CURRENT_TIMESTAMP()
+    target._load_timestamp = CURRENT_TIMESTAMP(),
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 -- Insert new deals
 WHEN NOT MATCHED THEN
@@ -275,7 +288,10 @@ WHEN NOT MATCHED THEN
     days_to_finalize,
     days_sign_to_fund,
     _source_table,
-    _load_timestamp
+    _load_timestamp,
+    has_credit_memo,
+    credit_memo_date_key,
+    credit_memo_time_key
   )
   VALUES (
     source.deal_key,
@@ -327,5 +343,8 @@ WHEN NOT MATCHED THEN
     source.days_to_finalize,
     source.days_sign_to_fund,
     source._source_table,
-    CURRENT_TIMESTAMP()
+    CURRENT_TIMESTAMP(),
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   ); 

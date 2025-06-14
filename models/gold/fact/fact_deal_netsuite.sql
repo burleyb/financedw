@@ -12,6 +12,12 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
   netsuite_posting_time_key BIGINT,
   revenue_recognition_date_key INT,
   revenue_recognition_time_key INT,
+  
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   vin STRING,
   month INT,
   year INT,
@@ -184,7 +190,13 @@ USING (
     sfn.deal_source,
     
     -- Metadata
-    sfn._source_table,
+    'silver.finance.fact_deal_netsuite' as _source_table,
+    
+    -- Credit memo flags
+    sfn.has_credit_memo,
+    sfn.credit_memo_date_key,
+    sfn.credit_memo_time_key,
+    
     CURRENT_TIMESTAMP() AS _load_timestamp
   
   FROM silver.finance.fact_deal_netsuite sfn
@@ -260,7 +272,10 @@ WHEN MATCHED AND (
     target.repo = source.repo,
     target.deal_source = source.deal_source,
     target._source_table = source._source_table,
-    target._load_timestamp = source._load_timestamp
+    target._load_timestamp = source._load_timestamp,
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 WHEN NOT MATCHED THEN
   INSERT (
@@ -325,7 +340,10 @@ WHEN NOT MATCHED THEN
     repo,
     deal_source,
     _source_table,
-    _load_timestamp
+    _load_timestamp,
+    has_credit_memo,
+    credit_memo_date_key,
+    credit_memo_time_key
   )
   VALUES (
     source.deal_key,
@@ -389,5 +407,8 @@ WHEN NOT MATCHED THEN
     source.repo,
     source.deal_source,
     source._source_table,
-    source._load_timestamp
+    source._load_timestamp,
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   ); 

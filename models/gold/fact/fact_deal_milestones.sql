@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_milestones (
   deal_state_key STRING, -- FK to dim_deal_state
   user_key STRING, -- FK to dim_user (who triggered the state change)
   
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   -- Milestone Classification
   milestone_category STRING, -- initiation, processing, completion, cancellation
   milestone_order INT, -- Workflow sequence order
@@ -56,7 +61,10 @@ USING (
     sfm.is_completion_milestone,
     sfm.is_cancellation_milestone,
     sfm._source_table,
-    CURRENT_TIMESTAMP() AS _load_timestamp
+    CURRENT_TIMESTAMP() AS _load_timestamp,
+    sfm.has_credit_memo,
+    sfm.credit_memo_date_key,
+    sfm.credit_memo_time_key
   FROM silver.finance.fact_deal_milestones sfm
   WHERE sfm._load_timestamp > COALESCE((SELECT MAX(_load_timestamp) FROM gold.finance.fact_deal_milestones), '1900-01-01')
 ) AS source
@@ -90,7 +98,10 @@ WHEN MATCHED AND (
     target.is_completion_milestone = source.is_completion_milestone,
     target.is_cancellation_milestone = source.is_cancellation_milestone,
     target._source_table = source._source_table,
-    target._load_timestamp = source._load_timestamp
+    target._load_timestamp = source._load_timestamp,
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 WHEN NOT MATCHED THEN
   INSERT (
@@ -109,7 +120,10 @@ WHEN NOT MATCHED THEN
     is_completion_milestone,
     is_cancellation_milestone,
     _source_table,
-    _load_timestamp
+    _load_timestamp,
+    has_credit_memo,
+    credit_memo_date_key,
+    credit_memo_time_key
   )
   VALUES (
     source.deal_key,
@@ -127,5 +141,8 @@ WHEN NOT MATCHED THEN
     source.is_completion_milestone,
     source.is_cancellation_milestone,
     source._source_table,
-    source._load_timestamp
+    source._load_timestamp,
+    source.has_credit_memo,
+    source.credit_memo_date_key,
+    source.credit_memo_time_key
   ); 

@@ -13,6 +13,12 @@ CREATE TABLE IF NOT EXISTS silver.finance.fact_deal_netsuite_transactions (
   netsuite_posting_time_key BIGINT,
   revenue_recognition_date_key INT,
   revenue_recognition_time_key INT,
+  
+  -- Credit Memo Flags
+  has_credit_memo BOOLEAN,
+  credit_memo_date_key INT, -- FK to dim_date
+  credit_memo_time_key INT, -- FK to dim_time
+  
   vin STRING,
   month INT,
   year INT,
@@ -44,17 +50,19 @@ MERGE INTO silver.finance.fact_deal_netsuite_transactions AS target
 USING (
   WITH revenue_recognition_data AS (
     SELECT
-        ds.deal_id,
-        ds.updated_date_utc as revenue_recognition_date_utc,
-        from_utc_timestamp(ds.updated_date_utc, 'America/Denver') as revenue_recognition_date_mt,
-        DATE_FORMAT(from_utc_timestamp(ds.updated_date_utc, 'America/Denver'), 'yyyy-MM') as revenue_recognition_period,
-        YEAR(from_utc_timestamp(ds.updated_date_utc, 'America/Denver')) as revenue_recognition_year,
-        MONTH(from_utc_timestamp(ds.updated_date_utc, 'America/Denver')) as revenue_recognition_month,
-        ROW_NUMBER() OVER (PARTITION BY ds.deal_id ORDER BY ds.updated_date_utc ASC) as rn
-    FROM bronze.leaseend_db_public.deal_states ds
-    WHERE ds.state = 'funded' 
-        AND ds.deal_id IS NOT NULL 
-        AND (ds._fivetran_deleted = FALSE OR ds._fivetran_deleted IS NULL)
+        t.custbody_le_deal_id as deal_id,
+        t.trandate as revenue_recognition_date_utc,
+        from_utc_timestamp(t.trandate, 'America/Denver') as revenue_recognition_date_mt,
+        DATE_FORMAT(from_utc_timestamp(t.trandate, 'America/Denver'), 'yyyy-MM') as revenue_recognition_period,
+        YEAR(from_utc_timestamp(t.trandate, 'America/Denver')) as revenue_recognition_year,
+        MONTH(from_utc_timestamp(t.trandate, 'America/Denver')) as revenue_recognition_month,
+        ROW_NUMBER() OVER (PARTITION BY t.custbody_le_deal_id ORDER BY t.trandate ASC, t.createddate ASC) as rn
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'SALESORD'  -- Sales orders only
+        AND t.custbody_le_deal_id IS NOT NULL 
+        AND t.trandate IS NOT NULL
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
   ),
   
   deal_vins AS (
@@ -68,6 +76,16 @@ USING (
         AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
   ),
   
+  credit_memo_vins AS (
+    SELECT UPPER(t.custbody_leaseend_vinno) AS vin, MIN(DATE(t.trandate)) AS credit_memo_date
+    FROM bronze.ns.transaction t
+    WHERE t.abbrevtype = 'CREDITMEMO'
+      AND t.custbody_leaseend_vinno IS NOT NULL
+      AND LENGTH(t.custbody_leaseend_vinno) = 17
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+    GROUP BY UPPER(t.custbody_leaseend_vinno)
+  ),
+  
   revenue_recognition_with_vins AS (
     SELECT 
         frr.deal_id,
@@ -79,6 +97,7 @@ USING (
         dv.vin
     FROM revenue_recognition_data frr
     INNER JOIN deal_vins dv ON frr.deal_id = dv.deal_id
+    LEFT JOIN credit_memo_vins cmv ON dv.vin = cmv.vin
     WHERE frr.rn = 1
   ),
   
@@ -380,10 +399,14 @@ USING (
         CAST(vmr.total_amount AS DECIMAL(15,2)) as amount_dollars,
         'VIN_MATCH' as allocation_method,
         CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.salesinvoiced' as _source_table
+        'bronze.ns.salesinvoiced' as _source_table,
+        CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
     FROM revenue_recognition_with_vins rrwv
     INNER JOIN vin_matching_revenue vmr ON rrwv.vin = vmr.vin
     INNER JOIN account_mappings am ON vmr.account = am.account_id
+    LEFT JOIN credit_memo_vins cmv ON rrwv.vin = cmv.vin
     
     UNION ALL
     
@@ -406,10 +429,14 @@ USING (
         CAST(vme.total_amount AS DECIMAL(15,2)) as amount_dollars,
         'VIN_MATCH' as allocation_method,
         CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.transactionline' as _source_table
+        'bronze.ns.transactionline' as _source_table,
+        CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
     FROM revenue_recognition_with_vins rrwv
     INNER JOIN vin_matching_expenses vme ON rrwv.vin = vme.vin
     INNER JOIN account_mappings am ON vme.account = am.account_id
+    LEFT JOIN credit_memo_vins cmv ON rrwv.vin = cmv.vin
     
     UNION ALL
     
@@ -432,7 +459,10 @@ USING (
         CAST(mvr.total_amount / NULLIF(dpp.deal_count, 0) AS DECIMAL(15,2)) as amount_dollars,
         'PERIOD_ALLOCATION' as allocation_method,
         CAST(1.0 / NULLIF(dpp.deal_count, 0) AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.salesinvoiced' as _source_table
+        'bronze.ns.salesinvoiced' as _source_table,
+        FALSE AS has_credit_memo,
+        CAST(NULL AS INT) AS credit_memo_date_key,
+        CAST(NULL AS INT) AS credit_memo_time_key
     FROM revenue_recognition_with_vins rrwv
     INNER JOIN deals_per_period dpp ON rrwv.revenue_recognition_period = dpp.revenue_recognition_period
     INNER JOIN missing_vin_revenue mvr ON rrwv.revenue_recognition_period = mvr.revenue_recognition_period
@@ -459,7 +489,10 @@ USING (
         CAST(mve.total_amount / NULLIF(dpp.deal_count, 0) AS DECIMAL(15,2)) as amount_dollars,
         'PERIOD_ALLOCATION' as allocation_method,
         CAST(1.0 / NULLIF(dpp.deal_count, 0) AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.transactionline' as _source_table
+        'bronze.ns.transactionline' as _source_table,
+        FALSE AS has_credit_memo,
+        CAST(NULL AS INT) AS credit_memo_date_key,
+        CAST(NULL AS INT) AS credit_memo_time_key
     FROM revenue_recognition_with_vins rrwv
     INNER JOIN deals_per_period dpp ON rrwv.revenue_recognition_period = dpp.revenue_recognition_period
     INNER JOIN missing_vin_expenses mve ON rrwv.revenue_recognition_period = mve.revenue_recognition_period
@@ -486,10 +519,14 @@ USING (
         CAST(vma.total_amount AS DECIMAL(15,2)) as amount_dollars,
         'VIN_MATCH' as allocation_method,
         CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.transactionaccountingline' as _source_table
+        'bronze.ns.transactionaccountingline' as _source_table,
+        CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
     FROM revenue_recognition_with_vins rrwv
     INNER JOIN vin_matching_accounting vma ON rrwv.vin = vma.vin
     INNER JOIN account_mappings am ON vma.account = am.account_id
+    LEFT JOIN credit_memo_vins cmv ON rrwv.vin = cmv.vin
     
 
     
@@ -514,7 +551,10 @@ USING (
         CAST(mva.total_amount / NULLIF(dpp.deal_count, 0) AS DECIMAL(15,2)) as amount_dollars,
         'PERIOD_ALLOCATION' as allocation_method,
         CAST(1.0 / NULLIF(dpp.deal_count, 0) AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.transactionaccountingline' as _source_table
+        'bronze.ns.transactionaccountingline' as _source_table,
+        FALSE AS has_credit_memo,
+        CAST(NULL AS INT) AS credit_memo_date_key,
+        CAST(NULL AS INT) AS credit_memo_time_key
     FROM revenue_recognition_with_vins rrwv
     INNER JOIN deals_per_period dpp ON rrwv.revenue_recognition_period = dpp.revenue_recognition_period
     INNER JOIN missing_vin_accounting mva ON rrwv.revenue_recognition_period = mva.revenue_recognition_period
@@ -541,7 +581,10 @@ USING (
         CAST(total_amount AS DECIMAL(15,2)) as amount_dollars,
         'UNALLOCATED' as allocation_method,
         CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.salesinvoiced' as _source_table
+        'bronze.ns.salesinvoiced' as _source_table,
+        FALSE AS has_credit_memo,
+        CAST(NULL AS INT) AS credit_memo_date_key,
+        CAST(NULL AS INT) AS credit_memo_time_key
     FROM unallocated_revenue
     
     UNION ALL
@@ -565,7 +608,10 @@ USING (
         CAST(total_amount AS DECIMAL(15,2)) as amount_dollars,
         'UNALLOCATED' as allocation_method,
         CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.transactionline' as _source_table
+        'bronze.ns.transactionline' as _source_table,
+        FALSE AS has_credit_memo,
+        CAST(NULL AS INT) AS credit_memo_date_key,
+        CAST(NULL AS INT) AS credit_memo_time_key
     FROM unallocated_expenses
     
     UNION ALL
@@ -589,7 +635,10 @@ USING (
         CAST(total_amount AS DECIMAL(15,2)) as amount_dollars,
         'UNALLOCATED' as allocation_method,
         CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-        'bronze.ns.transactionaccountingline' as _source_table
+        'bronze.ns.transactionaccountingline' as _source_table,
+        FALSE AS has_credit_memo,
+        CAST(NULL AS INT) AS credit_memo_date_key,
+        CAST(NULL AS INT) AS credit_memo_time_key
     FROM unallocated_accounting
   )
   
@@ -620,18 +669,21 @@ WHEN MATCHED THEN
     target.allocation_method = source.allocation_method,
     target.allocation_factor = source.allocation_factor,
     target._source_table = source._source_table,
-    target._load_timestamp = source._load_timestamp
+    target._load_timestamp = source._load_timestamp,
+    target.has_credit_memo = source.has_credit_memo,
+    target.credit_memo_date_key = source.credit_memo_date_key,
+    target.credit_memo_time_key = source.credit_memo_time_key
 
 WHEN NOT MATCHED THEN
   INSERT (
     transaction_key, deal_key, account_key, netsuite_posting_date_key, netsuite_posting_time_key,
     revenue_recognition_date_key, revenue_recognition_time_key, vin, month, year,
     transaction_type, transaction_category, transaction_subcategory, amount_cents, amount_dollars,
-    allocation_method, allocation_factor, _source_table, _load_timestamp
+    allocation_method, allocation_factor, _source_table, _load_timestamp, has_credit_memo, credit_memo_date_key, credit_memo_time_key
   )
   VALUES (
     source.transaction_key, source.deal_key, source.account_key, source.netsuite_posting_date_key, source.netsuite_posting_time_key,
     source.revenue_recognition_date_key, source.revenue_recognition_time_key, source.vin, source.month, source.year,
     source.transaction_type, source.transaction_category, source.transaction_subcategory, source.amount_cents, source.amount_dollars,
-    source.allocation_method, source.allocation_factor, source._source_table, source._load_timestamp
+    source.allocation_method, source.allocation_factor, source._source_table, source._load_timestamp, source.has_credit_memo, source.credit_memo_date_key, source.credit_memo_time_key
   ); 
