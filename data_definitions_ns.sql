@@ -10559,3 +10559,156 @@ TBLPROPERTIES (
   'delta.feature.invariants' = 'supported',
   'delta.minReaderVersion' = '3',
   'delta.minWriterVersion' = '7');
+
+
+
+
+
+  -- bronze.ns_netsuite.netsuite2__balance_sheet definition
+
+CREATE TABLE bronze.ns_netsuite.netsuite2__balance_sheet (
+  transaction_id BIGINT,
+  transaction_line_id BIGINT,
+  subsidiary_id BIGINT,
+  _fivetran_synced_date DATE,
+  subsidiary_full_name STRING,
+  subsidiary_name STRING,
+  subsidiary_currency_symbol STRING,
+  accounting_book_id BIGINT,
+  accounting_book_name STRING,
+  accounting_period_id BIGINT,
+  accounting_period_ending DATE,
+  accounting_period_name STRING,
+  is_accounting_period_adjustment BOOLEAN,
+  is_accounting_period_closed BOOLEAN,
+  account_category STRING,
+  account_name STRING,
+  account_display_name STRING,
+  account_type_name STRING,
+  account_type_id STRING,
+  account_id BIGINT,
+  account_number STRING,
+  is_account_intercompany BOOLEAN,
+  is_account_leftside BOOLEAN,
+  converted_amount DOUBLE,
+  transaction_amount DOUBLE,
+  balance_sheet_sort_helper INT,
+  balance_sheet_id STRING)
+USING delta
+PARTITIONED BY (_fivetran_synced_date)
+TBLPROPERTIES (
+  'delta.checkpoint.writeStatsAsJson' = 'false',
+  'delta.checkpoint.writeStatsAsStruct' = 'true',
+  'delta.feature.deletionVectors' = 'supported',
+  'delta.minReaderVersion' = '3',
+  'delta.minWriterVersion' = '7');
+
+
+-- bronze.ns_netsuite.netsuite2__income_statement definition
+
+CREATE TABLE bronze.ns_netsuite.netsuite2__income_statement (
+  transaction_id BIGINT,
+  transaction_line_id BIGINT,
+  _fivetran_synced_date DATE,
+  accounting_book_id BIGINT,
+  accounting_book_name STRING,
+  accounting_period_id BIGINT,
+  accounting_period_ending DATE,
+  accounting_period_name STRING,
+  is_accounting_period_adjustment BOOLEAN,
+  is_accounting_period_closed BOOLEAN,
+  account_name STRING,
+  account_display_name STRING,
+  account_type_name STRING,
+  account_type_id STRING,
+  account_id BIGINT,
+  account_number STRING,
+  subsidiary_id BIGINT,
+  subsidiary_full_name STRING,
+  subsidiary_name STRING,
+  subsidiary_currency_symbol STRING,
+  account_number_and_name STRING,
+  class_id BIGINT,
+  class_full_name STRING,
+  location_id BIGINT,
+  location_full_name STRING,
+  department_id BIGINT,
+  department_full_name STRING,
+  account_category STRING,
+  income_statement_sort_helper INT,
+  converted_amount DOUBLE,
+  transaction_amount DOUBLE,
+  income_statement_id STRING)
+USING delta
+PARTITIONED BY (_fivetran_synced_date)
+TBLPROPERTIES (
+  'delta.checkpoint.writeStatsAsJson' = 'false',
+  'delta.checkpoint.writeStatsAsStruct' = 'true',
+  'delta.feature.deletionVectors' = 'supported',
+  'delta.minReaderVersion' = '3',
+  'delta.minWriterVersion' = '7');
+
+
+-- bronze.ns_netsuite.netsuite2__transaction_details definition
+
+CREATE TABLE bronze.ns_netsuite.netsuite2__transaction_details (
+  accounting_book_id BIGINT,
+  accounting_book_name STRING,
+  transaction_line_id BIGINT,
+  transaction_memo STRING,
+  is_transaction_non_posting BOOLEAN,
+  transaction_id BIGINT,
+  transaction_status STRING,
+  transaction_date TIMESTAMP,
+  transaction_due_date TIMESTAMP,
+  transaction_type STRING,
+  is_transaction_intercompany_adjustment BOOLEAN,
+  accounting_period_ending TIMESTAMP,
+  accounting_period_name STRING,
+  accounting_period_id BIGINT,
+  is_accounting_period_adjustment BOOLEAN,
+  is_accounting_period_closed BOOLEAN,
+  account_name STRING,
+  account_type_name STRING,
+  account_type_id STRING,
+  account_id BIGINT,
+  account_number STRING,
+  is_account_leftside BOOLEAN,
+  is_accounts_payable BOOLEAN,
+  is_accounts_receivable BOOLEAN,
+  is_account_intercompany BOOLEAN,
+  parent_account_name STRING,
+  is_expense_account BOOLEAN,
+  is_income_account BOOLEAN,
+  company_name STRING,
+  customer_city STRING,
+  customer_state STRING,
+  customer_zipcode STRING,
+  customer_country STRING,
+  customer_date_first_order TIMESTAMP,
+  customer_external_id STRING,
+  class_full_name STRING,
+  item_name STRING,
+  item_type_name STRING,
+  sales_description STRING,
+  location_name STRING,
+  location_city STRING,
+  location_country STRING,
+  vendor_category_name STRING,
+  vendor_name STRING,
+  vendor_create_date TIMESTAMP,
+  currency_name STRING,
+  currency_symbol STRING,
+  department_name STRING,
+  subsidiary_id BIGINT,
+  subsidiary_name STRING,
+  converted_amount DOUBLE,
+  transaction_amount DOUBLE,
+  transaction_details_id STRING)
+USING delta
+TBLPROPERTIES (
+  'delta.checkpoint.writeStatsAsJson' = 'false',
+  'delta.checkpoint.writeStatsAsStruct' = 'true',
+  'delta.feature.deletionVectors' = 'supported',
+  'delta.minReaderVersion' = '3',
+  'delta.minWriterVersion' = '7');
