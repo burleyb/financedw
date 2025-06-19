@@ -515,23 +515,88 @@ USING (
   
 
   
-  -- Missing VIN transactions by period (for allocation) - ONLY deal-linked transactions
+  -- Missing VIN transactions by period (for allocation) - ENHANCED with VIN lookup
+  -- Try to resolve VINs first before allocating across deals
   missing_vin_revenue AS (
+    WITH missing_vin_with_lookup AS (
+      SELECT
+          rrwv.revenue_recognition_period,
+          so.account,
+          so.amount,
+          t.custbody_le_deal_id as deal_id,
+          -- VIN lookup logic: use NetSuite VIN if valid, otherwise lookup from cars table
+          COALESCE(
+              CASE 
+                  WHEN LENGTH(t.custbody_leaseend_vinno) = 17 
+                      AND t.custbody_leaseend_vinno IS NOT NULL 
+                      AND t.custbody_leaseend_vinno NOT LIKE '%,%'
+                  THEN UPPER(t.custbody_leaseend_vinno)
+                  ELSE NULL
+              END,
+              dv.vin
+          ) as resolved_vin
+      FROM bronze.ns.salesinvoiced AS so
+      INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
+      INNER JOIN bronze.leaseend_db_public.deals d ON t.custbody_le_deal_id = d.id
+      INNER JOIN revenue_recognition_with_vins rrwv ON d.id = rrwv.deal_id
+      INNER JOIN account_mappings am ON so.account = am.account_id
+      LEFT JOIN deal_vins dv ON t.custbody_le_deal_id = dv.deal_id
+      WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
+          AND t.custbody_le_deal_id IS NOT NULL
+          AND am.transaction_type = 'REVENUE'
+          AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+          AND so.amount != 0
+    )
+    -- Only include transactions that still can't be resolved after VIN lookup
     SELECT
-        rrwv.revenue_recognition_period,
-        so.account,
-        SUM(so.amount) AS total_amount
-    FROM bronze.ns.salesinvoiced AS so
-    INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
-    INNER JOIN bronze.leaseend_db_public.deals d ON t.custbody_le_deal_id = d.id
-    INNER JOIN revenue_recognition_with_vins rrwv ON d.id = rrwv.deal_id
-    INNER JOIN account_mappings am ON so.account = am.account_id
-    WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
-        AND t.custbody_le_deal_id IS NOT NULL
-        AND am.transaction_type = 'REVENUE'
-        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-        AND so.amount != 0
-    GROUP BY rrwv.revenue_recognition_period, so.account
+        revenue_recognition_period,
+        account,
+        SUM(amount) AS total_amount
+    FROM missing_vin_with_lookup
+    WHERE resolved_vin IS NULL  -- Only transactions that still have no VIN after lookup
+    GROUP BY revenue_recognition_period, account
+  ),
+  
+  -- NEW: VIN-resolved missing transactions (previously would have been allocated)
+  vin_resolved_missing_revenue AS (
+    WITH missing_vin_with_lookup AS (
+      SELECT
+          rrwv.revenue_recognition_period,
+          so.account,
+          so.amount,
+          t.custbody_le_deal_id as deal_id,
+          rrwv.vin as recognition_vin,
+          -- VIN lookup logic: use NetSuite VIN if valid, otherwise lookup from cars table
+          COALESCE(
+              CASE 
+                  WHEN LENGTH(t.custbody_leaseend_vinno) = 17 
+                      AND t.custbody_leaseend_vinno IS NOT NULL 
+                      AND t.custbody_leaseend_vinno NOT LIKE '%,%'
+                  THEN UPPER(t.custbody_leaseend_vinno)
+                  ELSE NULL
+              END,
+              dv.vin
+          ) as resolved_vin
+      FROM bronze.ns.salesinvoiced AS so
+      INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
+      INNER JOIN bronze.leaseend_db_public.deals d ON t.custbody_le_deal_id = d.id
+      INNER JOIN revenue_recognition_with_vins rrwv ON d.id = rrwv.deal_id
+      INNER JOIN account_mappings am ON so.account = am.account_id
+      LEFT JOIN deal_vins dv ON t.custbody_le_deal_id = dv.deal_id
+      WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
+          AND t.custbody_le_deal_id IS NOT NULL
+          AND am.transaction_type = 'REVENUE'
+          AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+          AND so.amount != 0
+    )
+    -- Include transactions that were resolved via VIN lookup
+    SELECT
+        resolved_vin as vin,
+        account,
+        SUM(amount) AS total_amount
+    FROM missing_vin_with_lookup
+    WHERE resolved_vin IS NOT NULL  -- Only transactions resolved via VIN lookup
+    GROUP BY resolved_vin, account
   ),
   
   missing_vin_expenses AS (
@@ -935,6 +1000,45 @@ USING (
     FROM multi_vin_revenue mvr
     LEFT JOIN deal_vins dv ON mvr.vin = dv.vin
     WHERE dv.deal_id IS NULL -- Only include VINs that can't be matched to deals
+    
+    UNION ALL
+    
+    -- VIN-resolved missing revenue transactions (previously would have been allocated)
+    -- These are transactions that had deal_id but no VIN, but we found the VIN via lookup
+    SELECT
+        CONCAT(canonical_dv.deal_id, '_', vrm.account, '_VIN_RESOLVED_REVENUE') as transaction_key,
+        CAST(canonical_dv.deal_id AS STRING) as deal_key,
+        CAST(vrm.account AS STRING) as account_key,
+        COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_mt, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+        COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_mt, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+        COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_utc, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+        COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_utc, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+        vrm.vin,
+        rrwv.revenue_recognition_month as month,
+        rrwv.revenue_recognition_year as year,
+        am.transaction_type,
+        am.transaction_category,
+        am.transaction_subcategory,
+        CAST(ROUND(vrm.total_amount * 100) AS BIGINT) as amount_cents,
+        CAST(vrm.total_amount AS DECIMAL(15,2)) as amount_dollars,
+        'VIN_LOOKUP_MATCH' as allocation_method,
+        CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+        'bronze.ns.salesinvoiced' as _source_table,
+        CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+        COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
+    FROM vin_resolved_missing_revenue vrm
+    INNER JOIN (
+        -- Pick one canonical deal per VIN 
+        SELECT 
+            vin,
+            MAX(deal_id) as deal_id
+        FROM deal_vins
+        GROUP BY vin
+    ) canonical_dv ON vrm.vin = canonical_dv.vin
+    INNER JOIN revenue_recognition_with_vins rrwv ON canonical_dv.deal_id = rrwv.deal_id AND vrm.vin = rrwv.vin
+    INNER JOIN account_mappings am ON vrm.account = am.account_id
+    LEFT JOIN credit_memo_vins cmv ON vrm.vin = cmv.vin
     
     UNION ALL
     
