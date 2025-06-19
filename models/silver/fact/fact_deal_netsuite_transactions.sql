@@ -320,11 +320,12 @@ USING (
   -- VIN-matching expenses - USE TRANSACTIONLINE for expense accounts (VIN + Deal ID)
   -- Exclude accounts 5110 and 5120 as they show $0 in income statement but large amounts via VIN-matching
   -- Only match EXACT 17-character VINs (no commas or multiple VINs)
+  -- SIGN CORRECTION: Negate foreignamount to match income statement format (expenses should be negative)
   vin_matching_expenses AS (
     SELECT
         UPPER(t.custbody_leaseend_vinno) as vin,
         tl.expenseaccount as account,
-        SUM(tl.foreignamount) AS total_amount
+        SUM(-tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -346,6 +347,7 @@ USING (
   -- Captures VINs that either have no deal_id OR have deal_id but don't match our VIN_MATCH criteria
   -- Also exclude accounts 5110, 5120, 5110A, 5120A from VIN-only matching
   -- Only match EXACT 17-character VINs (no commas or multiple VINs)
+  -- SIGN CORRECTION: Negate foreignamount to match income statement format (expenses should be negative)
   vin_only_expenses AS (
     SELECT
         UPPER(t.custbody_leaseend_vinno) as vin,
@@ -354,7 +356,7 @@ USING (
         YEAR(t.trandate) as transaction_year,
         MONTH(t.trandate) as transaction_month,
         t.trandate,
-        SUM(tl.foreignamount) AS total_amount
+        SUM(-tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -381,7 +383,8 @@ USING (
           t.trandate,
           t.custbody_leaseend_vinno as vin_list,
           tl.expenseaccount as account,
-          tl.foreignamount as total_amount,
+          -- SIGN CORRECTION: Negate foreignamount for expenses to match income statement format
+          -tl.foreignamount as total_amount,
           am.transaction_type,
           am.transaction_category,
           am.transaction_subcategory
@@ -603,7 +606,8 @@ USING (
     SELECT
         rrwv.revenue_recognition_period,
         tl.expenseaccount as account,
-        SUM(tl.foreignamount) AS total_amount
+        -- SIGN CORRECTION: Negate foreignamount for expenses to match income statement format
+        SUM(-tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN bronze.leaseend_db_public.deals d ON t.custbody_le_deal_id = d.id
@@ -641,7 +645,8 @@ USING (
     SELECT
         DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
         tl.expenseaccount as account,
-        SUM(tl.foreignamount) AS total_amount
+        -- SIGN CORRECTION: Negate foreignamount for expenses to match income statement format
+        SUM(-tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
