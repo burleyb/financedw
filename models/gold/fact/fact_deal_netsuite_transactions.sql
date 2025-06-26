@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite_transactions (
   has_credit_memo BOOLEAN,
   credit_memo_date_key INT, -- FK to dim_date
   credit_memo_time_key INT, -- FK to dim_time
+  is_driver_count BOOLEAN,
   
   vin STRING,
   month INT,
@@ -185,7 +186,8 @@ USING (
       -- Credit memo flags
       sf.has_credit_memo,
       sf.credit_memo_date_key,
-      sf.credit_memo_time_key
+      sf.credit_memo_time_key,
+      sf.is_driver_count
     FROM silver.finance.fact_deal_netsuite_transactions sf
     INNER JOIN fiscal_calendar fc ON sf.month = fc.month AND sf.year = fc.year
     -- Ensure account exists in gold dimension (left join to allow NULL deal_key transactions)
@@ -252,6 +254,7 @@ WHEN MATCHED THEN
     target.has_credit_memo = source.has_credit_memo,
     target.credit_memo_date_key = source.credit_memo_date_key,
     target.credit_memo_time_key = source.credit_memo_time_key,
+    target.is_driver_count = source.is_driver_count,
     target._gold_processed_timestamp = source._gold_processed_timestamp
 
 WHEN NOT MATCHED THEN
@@ -264,7 +267,7 @@ WHEN NOT MATCHED THEN
     is_revenue, is_expense, is_other_income, is_other_expense,
     amount_cents, amount_dollars, amount_dollars_abs, allocation_method, allocation_factor,
     data_quality_score, profit_contribution,
-    _source_table, _load_timestamp, has_credit_memo, credit_memo_date_key, credit_memo_time_key, _gold_processed_timestamp
+    _source_table, _load_timestamp, has_credit_memo, credit_memo_date_key, credit_memo_time_key, is_driver_count, _gold_processed_timestamp
   )
   VALUES (
     source.transaction_key, source.deal_key, source.account_key, source.netsuite_posting_date_key, source.netsuite_posting_time_key,
@@ -275,7 +278,7 @@ WHEN NOT MATCHED THEN
     source.is_revenue, source.is_expense, source.is_other_income, source.is_other_expense,
     source.amount_cents, source.amount_dollars, source.amount_dollars_abs, source.allocation_method, source.allocation_factor,
     source.data_quality_score, source.profit_contribution,
-    source._source_table, source._load_timestamp, source.has_credit_memo, source.credit_memo_date_key, source.credit_memo_time_key, source._gold_processed_timestamp
+    source._source_table, source._load_timestamp, source.has_credit_memo, source.credit_memo_date_key, source.credit_memo_time_key, source.is_driver_count, source._gold_processed_timestamp
   );
 
 -- 3. Create optimized indexes and statistics

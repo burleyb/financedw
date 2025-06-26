@@ -872,32 +872,32 @@ USING (
     aa.year as year,
     
     -- Revenue fields (convert to cents) - combine VIN-matching + allocated missing VIN amounts
-    CAST(ROUND(COALESCE(vmr.total_amount, 0) * 100) AS BIGINT) AS `4105_rev_reserve`,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmr.total_amount), 0) * 100) AS BIGINT) AS `4105_rev_reserve`,
     CAST(ROUND(aa.allocated_reserve_bonus * 100) AS BIGINT) AS reserve_bonus_rev_4106,
     CAST(ROUND(aa.allocated_reserve_chargeback * 100) AS BIGINT) AS reserve_chargeback_rev_4107,
-    CAST(ROUND((COALESCE(vmr.total_amount, 0) + aa.allocated_reserve_bonus + aa.allocated_reserve_chargeback) * 100) AS BIGINT) AS reserve_total_rev,
-    CAST(ROUND(COALESCE(vmvr.total_amount, 0) * 100) AS BIGINT) AS vsc_rev_4110,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmr.total_amount), 0) + aa.allocated_reserve_bonus + aa.allocated_reserve_chargeback) * 100) AS BIGINT) AS reserve_total_rev,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmvr.total_amount), 0) * 100) AS BIGINT) AS vsc_rev_4110,
     CAST(ROUND(aa.allocated_vsc_advance * 100) AS BIGINT) AS vsc_advance_rev_4110a,
-    CAST(ROUND(COALESCE(vmvb.total_amount, 0) * 100) AS BIGINT) AS vsc_volume_bonus_rev_4110b,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmvb.total_amount), 0) * 100) AS BIGINT) AS vsc_volume_bonus_rev_4110b,
     CAST(ROUND(aa.allocated_vsc_cost * 100) AS BIGINT) AS vsc_cost_rev_4110c,
     CAST(ROUND(aa.allocated_vsc_chargeback * 100) AS BIGINT) AS vsc_chargeback_rev_4111,
-    CAST(ROUND((COALESCE(vmvr.total_amount, 0) + aa.allocated_vsc_advance + COALESCE(vmvb.total_amount, 0) + aa.allocated_vsc_cost + aa.allocated_vsc_chargeback) * 100) AS BIGINT) AS vsc_total_rev,
-    CAST(ROUND(COALESCE(vmgr.total_amount, 0) * 100) AS BIGINT) AS gap_rev_4120,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmvr.total_amount), 0) + aa.allocated_vsc_advance + COALESCE(ANY_VALUE(vmvb.total_amount), 0) + aa.allocated_vsc_cost + aa.allocated_vsc_chargeback) * 100) AS BIGINT) AS vsc_total_rev,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmgr.total_amount), 0) * 100) AS BIGINT) AS gap_rev_4120,
     CAST(ROUND(aa.allocated_gap_advance * 100) AS BIGINT) AS gap_advance_rev_4120a,
-    CAST(ROUND(COALESCE(vmgvb.total_amount, 0) * 100) AS BIGINT) AS gap_volume_bonus_rev_4120b,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmgvb.total_amount), 0) * 100) AS BIGINT) AS gap_volume_bonus_rev_4120b,
     CAST(ROUND(aa.allocated_gap_cost * 100) AS BIGINT) AS gap_cost_rev_4120c,
     CAST(ROUND(aa.allocated_gap_chargeback * 100) AS BIGINT) AS gap_chargeback_rev_4121,
-    CAST(ROUND((COALESCE(vmgr.total_amount, 0) + aa.allocated_gap_advance + COALESCE(vmgvb.total_amount, 0) + aa.allocated_gap_cost + aa.allocated_gap_chargeback) * 100) AS BIGINT) AS gap_total_rev,
-    CAST(ROUND(COALESCE(vmdf.total_amount, 0) * 100) AS BIGINT) AS doc_fees_rev_4130,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmgr.total_amount), 0) + aa.allocated_gap_advance + COALESCE(ANY_VALUE(vmgvb.total_amount), 0) + aa.allocated_gap_cost + aa.allocated_gap_chargeback) * 100) AS BIGINT) AS gap_total_rev,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmdf.total_amount), 0) * 100) AS BIGINT) AS doc_fees_rev_4130,
     CAST(ROUND(aa.allocated_doc_chargeback * 100) AS BIGINT) AS doc_fees_chargeback_rev_4130c,
-    CAST(ROUND(COALESCE(vmtf.total_amount, 0) * 100) AS BIGINT) AS titling_fees_rev_4141,
-    CAST(ROUND((COALESCE(vmdf.total_amount, 0) + aa.allocated_doc_chargeback + COALESCE(vmtf.total_amount, 0)) * 100) AS BIGINT) AS `doc_&_title_total_rev`,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmtf.total_amount), 0) * 100) AS BIGINT) AS titling_fees_rev_4141,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmdf.total_amount), 0) + aa.allocated_doc_chargeback + COALESCE(ANY_VALUE(vmtf.total_amount), 0)) * 100) AS BIGINT) AS `doc_&_title_total_rev`,
     CAST(ROUND(aa.allocated_rebates * 100) AS BIGINT) AS rebates_discounts_4190,
     CAST(ROUND((
-      COALESCE(vmr.total_amount, 0) + aa.allocated_reserve_bonus + aa.allocated_reserve_chargeback +
-      COALESCE(vmvr.total_amount, 0) + aa.allocated_vsc_advance + COALESCE(vmvb.total_amount, 0) + aa.allocated_vsc_cost + aa.allocated_vsc_chargeback +
-      COALESCE(vmgr.total_amount, 0) + aa.allocated_gap_advance + COALESCE(vmgvb.total_amount, 0) + aa.allocated_gap_cost + aa.allocated_gap_chargeback +
-      COALESCE(vmdf.total_amount, 0) + aa.allocated_doc_chargeback + COALESCE(vmtf.total_amount, 0) +
+      COALESCE(ANY_VALUE(vmr.total_amount), 0) + aa.allocated_reserve_bonus + aa.allocated_reserve_chargeback +
+      COALESCE(ANY_VALUE(vmvr.total_amount), 0) + aa.allocated_vsc_advance + COALESCE(ANY_VALUE(vmvb.total_amount), 0) + aa.allocated_vsc_cost + aa.allocated_vsc_chargeback +
+      COALESCE(ANY_VALUE(vmgr.total_amount), 0) + aa.allocated_gap_advance + COALESCE(ANY_VALUE(vmgvb.total_amount), 0) + aa.allocated_gap_cost + aa.allocated_gap_chargeback +
+      COALESCE(ANY_VALUE(vmdf.total_amount), 0) + aa.allocated_doc_chargeback + COALESCE(ANY_VALUE(vmtf.total_amount), 0) +
       aa.allocated_rebates
     ) * 100) AS BIGINT) AS total_revenue,
     
@@ -911,43 +911,43 @@ USING (
     CAST(ROUND(aa.allocated_direct_emp_benefits * 100) AS BIGINT) AS direct_emp_benefits_5330,
     CAST(ROUND(aa.allocated_direct_payroll_tax * 100) AS BIGINT) AS direct_payroll_tax_5340,
     CAST(ROUND((aa.allocated_funding_clerks + aa.allocated_commission + aa.allocated_sales_guarantee + aa.allocated_ic_payoff_team + aa.allocated_outbound_commission + aa.allocated_title_clerks + aa.allocated_direct_emp_benefits + aa.allocated_direct_payroll_tax) * 100) AS BIGINT) AS direct_people_cost,
-    CAST(ROUND(COALESCE(vmpv.total_amount, 0) * 100) AS BIGINT) AS payoff_variance_5400,
-    CAST(ROUND(COALESCE(vmstv.total_amount, 0) * 100) AS BIGINT) AS sales_tax_variance_5401,
-    CAST(ROUND(COALESCE(vmrv.total_amount, 0) * 100) AS BIGINT) AS registration_variance_5402,
-    CAST(ROUND(COALESCE(vmce.total_amount, 0) * 100) AS BIGINT) AS customer_experience_5403,
-    CAST(ROUND(COALESCE(vmp.total_amount, 0) * 100) AS BIGINT) AS penalties_5404,
-    CAST(ROUND((COALESCE(vmpv.total_amount, 0) + COALESCE(vmstv.total_amount, 0) + COALESCE(vmrv.total_amount, 0) + COALESCE(vmce.total_amount, 0) + COALESCE(vmp.total_amount, 0)) * 100) AS BIGINT) AS payoff_variance_total,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmpv.total_amount), 0) * 100) AS BIGINT) AS payoff_variance_5400,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmstv.total_amount), 0) * 100) AS BIGINT) AS sales_tax_variance_5401,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmrv.total_amount), 0) * 100) AS BIGINT) AS registration_variance_5402,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmce.total_amount), 0) * 100) AS BIGINT) AS customer_experience_5403,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmp.total_amount), 0) * 100) AS BIGINT) AS penalties_5404,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmpv.total_amount), 0) + COALESCE(ANY_VALUE(vmstv.total_amount), 0) + COALESCE(ANY_VALUE(vmrv.total_amount), 0) + COALESCE(ANY_VALUE(vmce.total_amount), 0) + COALESCE(ANY_VALUE(vmp.total_amount), 0)) * 100) AS BIGINT) AS payoff_variance_total,
     CAST(ROUND(aa.allocated_postage * 100) AS BIGINT) AS postage_5510,
-    CAST(ROUND(COALESCE(vmbbf.total_amount, 0) * 100) AS BIGINT) AS bank_buyout_fees_5520,
-    CAST(ROUND((COALESCE(vmbbf.total_amount, 0) + aa.allocated_postage) * 100) AS BIGINT) AS other_cor_total,
-    CAST(ROUND(COALESCE(vmvc.total_amount, 0) * 100) AS BIGINT) AS vsc_cor_5110,
-    CAST(ROUND(COALESCE(vmvae.total_amount, 0) * 100) AS BIGINT) AS vsc_advance_5110a,
-    CAST(ROUND((COALESCE(vmvc.total_amount, 0) + COALESCE(vmvae.total_amount, 0)) * 100) AS BIGINT) AS vsc_total,
-    CAST(ROUND(COALESCE(vmgc.total_amount, 0) * 100) AS BIGINT) AS gap_cor_5120,
-    CAST(ROUND(COALESCE(vmgae.total_amount, 0) * 100) AS BIGINT) AS gap_advance_5120a,
-    CAST(ROUND((COALESCE(vmgc.total_amount, 0) + COALESCE(vmgae.total_amount, 0)) * 100) AS BIGINT) AS gap_total,
-    CAST(ROUND(COALESCE(vmtfe.total_amount, 0) * 100) AS BIGINT) AS titling_fees_5141,
-    CAST(ROUND((COALESCE(vmvc.total_amount, 0) + COALESCE(vmvae.total_amount, 0) + COALESCE(vmgc.total_amount, 0) + COALESCE(vmgae.total_amount, 0) + COALESCE(vmtfe.total_amount, 0)) * 100) AS BIGINT) AS cor_total,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmbbf.total_amount), 0) * 100) AS BIGINT) AS bank_buyout_fees_5520,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmbbf.total_amount), 0) + aa.allocated_postage) * 100) AS BIGINT) AS other_cor_total,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmvc.total_amount), 0) * 100) AS BIGINT) AS vsc_cor_5110,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmvae.total_amount), 0) * 100) AS BIGINT) AS vsc_advance_5110a,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmvc.total_amount), 0) + COALESCE(ANY_VALUE(vmvae.total_amount), 0)) * 100) AS BIGINT) AS vsc_total,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmgc.total_amount), 0) * 100) AS BIGINT) AS gap_cor_5120,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmgae.total_amount), 0) * 100) AS BIGINT) AS gap_advance_5120a,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmgc.total_amount), 0) + COALESCE(ANY_VALUE(vmgae.total_amount), 0)) * 100) AS BIGINT) AS gap_total,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmtfe.total_amount), 0) * 100) AS BIGINT) AS titling_fees_5141,
+    CAST(ROUND((COALESCE(ANY_VALUE(vmvc.total_amount), 0) + COALESCE(ANY_VALUE(vmvae.total_amount), 0) + COALESCE(ANY_VALUE(vmgc.total_amount), 0) + COALESCE(ANY_VALUE(vmgae.total_amount), 0) + COALESCE(ANY_VALUE(vmtfe.total_amount), 0)) * 100) AS BIGINT) AS cor_total,
     CAST(ROUND((
       -- Total Revenue minus Total Expenses
-      (COALESCE(vmr.total_amount, 0) + aa.allocated_reserve_bonus + aa.allocated_reserve_chargeback +
-       COALESCE(vmvr.total_amount, 0) + aa.allocated_vsc_advance + COALESCE(vmvb.total_amount, 0) + aa.allocated_vsc_cost + aa.allocated_vsc_chargeback +
-       COALESCE(vmgr.total_amount, 0) + aa.allocated_gap_advance + COALESCE(vmgvb.total_amount, 0) + aa.allocated_gap_cost + aa.allocated_gap_chargeback +
-       COALESCE(vmdf.total_amount, 0) + aa.allocated_doc_chargeback + COALESCE(vmtf.total_amount, 0) +
+      (COALESCE(ANY_VALUE(vmr.total_amount), 0) + aa.allocated_reserve_bonus + aa.allocated_reserve_chargeback +
+       COALESCE(ANY_VALUE(vmvr.total_amount), 0) + aa.allocated_vsc_advance + COALESCE(ANY_VALUE(vmvb.total_amount), 0) + aa.allocated_vsc_cost + aa.allocated_vsc_chargeback +
+       COALESCE(ANY_VALUE(vmgr.total_amount), 0) + aa.allocated_gap_advance + COALESCE(ANY_VALUE(vmgvb.total_amount), 0) + aa.allocated_gap_cost + aa.allocated_gap_chargeback +
+       COALESCE(ANY_VALUE(vmdf.total_amount), 0) + aa.allocated_doc_chargeback + COALESCE(ANY_VALUE(vmtf.total_amount), 0) +
        aa.allocated_rebates) -
       (aa.allocated_funding_clerks + aa.allocated_commission + aa.allocated_sales_guarantee + aa.allocated_ic_payoff_team + 
        aa.allocated_outbound_commission + aa.allocated_title_clerks + aa.allocated_direct_emp_benefits + aa.allocated_direct_payroll_tax +
-       COALESCE(vmpv.total_amount, 0) + COALESCE(vmstv.total_amount, 0) + COALESCE(vmrv.total_amount, 0) + COALESCE(vmce.total_amount, 0) + 
-       COALESCE(vmp.total_amount, 0) + aa.allocated_postage + COALESCE(vmbbf.total_amount, 0) + COALESCE(vmtfe.total_amount, 0) + 
-       COALESCE(vmvc.total_amount, 0) + COALESCE(vmvae.total_amount, 0) + COALESCE(vmgc.total_amount, 0) + COALESCE(vmgae.total_amount, 0) + 
-       COALESCE(vmra.total_amount, 0))
+       COALESCE(ANY_VALUE(vmpv.total_amount), 0) + COALESCE(ANY_VALUE(vmstv.total_amount), 0) + COALESCE(ANY_VALUE(vmrv.total_amount), 0) + COALESCE(ANY_VALUE(vmce.total_amount), 0) + 
+       COALESCE(ANY_VALUE(vmp.total_amount), 0) + aa.allocated_postage + COALESCE(ANY_VALUE(vmbbf.total_amount), 0) + COALESCE(ANY_VALUE(vmtfe.total_amount), 0) + 
+       COALESCE(ANY_VALUE(vmvc.total_amount), 0) + COALESCE(ANY_VALUE(vmvae.total_amount), 0) + COALESCE(ANY_VALUE(vmgc.total_amount), 0) + COALESCE(ANY_VALUE(vmgae.total_amount), 0) + 
+       COALESCE(ANY_VALUE(vmra.total_amount), 0))
     ) * 100) AS BIGINT) AS gross_profit,
     CAST(0 AS BIGINT) AS gross_margin, -- Calculate as percentage later if needed
-    CAST(ROUND(COALESCE(vmra.total_amount, 0) * 100) AS BIGINT) AS repo,
+    CAST(ROUND(COALESCE(ANY_VALUE(vmra.total_amount), 0) * 100) AS BIGINT) AS repo,
     'netsuite' AS deal_source,
-          CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
+    ANY_VALUE(CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END) AS has_credit_memo,
+    ANY_VALUE(COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0)) AS credit_memo_date_key,
+    ANY_VALUE(COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0)) AS credit_memo_time_key,
     
     'bronze.ns.salesinvoiced' as _source_table,
     CURRENT_TIMESTAMP() AS _load_timestamp
@@ -974,7 +974,32 @@ USING (
   LEFT JOIN vin_matching_gap_advance_expense vmgae ON aa.vin = vmgae.vin
   LEFT JOIN vin_matching_repo_amount vmra ON aa.vin = vmra.vin
   LEFT JOIN credit_memo_vins cmv ON aa.vin = cmv.vin
-
+  LEFT JOIN silver.finance.fact_deal_netsuite_transactions sft ON CAST(aa.deal_id AS STRING) = sft.deal_key AND aa.vin = sft.vin
+  GROUP BY
+    aa.deal_id,
+    aa.ns_date,
+    aa.vin,
+    aa.month,
+    aa.year,
+    aa.allocated_reserve_bonus,
+    aa.allocated_reserve_chargeback,
+    aa.allocated_vsc_advance,
+    aa.allocated_vsc_cost,
+    aa.allocated_vsc_chargeback,
+    aa.allocated_gap_advance,
+    aa.allocated_gap_cost,
+    aa.allocated_gap_chargeback,
+    aa.allocated_doc_chargeback,
+    aa.allocated_rebates,
+    aa.allocated_funding_clerks,
+    aa.allocated_commission,
+    aa.allocated_sales_guarantee,
+    aa.allocated_ic_payoff_team,
+    aa.allocated_outbound_commission,
+    aa.allocated_title_clerks,
+    aa.allocated_direct_emp_benefits,
+    aa.allocated_direct_payroll_tax,
+    aa.allocated_postage
 ) AS source
 ON target.deal_key = source.deal_key AND target.vin = source.vin
 

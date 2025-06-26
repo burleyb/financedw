@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite (
   -- Metadata
   _source_table STRING,
   _load_timestamp TIMESTAMP
+
 )
 USING DELTA
 COMMENT 'Gold layer fact table for NetSuite financial aggregates - mirrors bigdealnscreation.py logic'
@@ -200,8 +201,73 @@ USING (
     CURRENT_TIMESTAMP() AS _load_timestamp
   
   FROM silver.finance.fact_deal_netsuite sfn
+  LEFT JOIN silver.finance.fact_deal_netsuite_transactions sft
+    ON sfn.deal_key = sft.deal_key AND sfn.vin = sft.vin
   WHERE sfn._load_timestamp > COALESCE((SELECT MAX(_load_timestamp) FROM gold.finance.fact_deal_netsuite), '1900-01-01')
-
+  GROUP BY
+    sfn.deal_key,
+    sfn.netsuite_posting_date_key,
+    sfn.netsuite_posting_time_key,
+    sfn.revenue_recognition_date_key,
+    sfn.revenue_recognition_time_key,
+    sfn.vin,
+    sfn.month,
+    sfn.year,
+    sfn.`4105_rev_reserve`,
+    sfn.reserve_bonus_rev_4106,
+    sfn.reserve_chargeback_rev_4107,
+    sfn.reserve_total_rev,
+    sfn.vsc_rev_4110,
+    sfn.vsc_advance_rev_4110a,
+    sfn.vsc_volume_bonus_rev_4110b,
+    sfn.vsc_cost_rev_4110c,
+    sfn.vsc_chargeback_rev_4111,
+    sfn.vsc_total_rev,
+    sfn.gap_rev_4120,
+    sfn.gap_advance_rev_4120a,
+    sfn.gap_volume_bonus_rev_4120b,
+    sfn.gap_cost_rev_4120c,
+    sfn.gap_chargeback_rev_4121,
+    sfn.gap_total_rev,
+    sfn.doc_fees_rev_4130,
+    sfn.doc_fees_chargeback_rev_4130c,
+    sfn.titling_fees_rev_4141,
+    sfn.`doc_&_title_total_rev`,
+    sfn.rebates_discounts_4190,
+    sfn.total_revenue,
+    sfn.funding_clerks_5301,
+    sfn.commission_5302,
+    sfn.sales_guarantee_5303,
+    sfn.ic_payoff_team_5304,
+    sfn.outbound_commission_5305,
+    sfn.title_clerks_5320,
+    sfn.direct_emp_benefits_5330,
+    sfn.direct_payroll_tax_5340,
+    sfn.direct_people_cost,
+    sfn.payoff_variance_5400,
+    sfn.sales_tax_variance_5401,
+    sfn.registration_variance_5402,
+    sfn.customer_experience_5403,
+    sfn.penalties_5404,
+    sfn.payoff_variance_total,
+    sfn.postage_5510,
+    sfn.bank_buyout_fees_5520,
+    sfn.other_cor_total,
+    sfn.vsc_cor_5110,
+    sfn.vsc_advance_5110a,
+    sfn.vsc_total,
+    sfn.gap_cor_5120,
+    sfn.gap_advance_5120a,
+    sfn.gap_total,
+    sfn.titling_fees_5141,
+    sfn.cor_total,
+    sfn.gross_profit,
+    sfn.gross_margin,
+    sfn.repo,
+    sfn.deal_source,
+    sfn.has_credit_memo,
+    sfn.credit_memo_date_key,
+    sfn.credit_memo_time_key
 ) AS source
 ON target.deal_key = source.deal_key
 
