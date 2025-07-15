@@ -64,104 +64,67 @@ USING (
     -- Business-specific account mappings (same as fact table)
     SELECT * FROM VALUES
       -- 4000 SERIES - REVENUE
-      -- 4105 - REV - RESERVE
-      (236, 'REVENUE', 'RESERVE', 'BASE'),
-      (474, 'REVENUE', 'RESERVE', 'BONUS'),
-      (524, 'REVENUE', 'RESERVE', 'CHARGEBACK'),
-      
+      ('4105', 'REVENUE', 'RESERVE', 'BASE'),
+      ('4106', 'REVENUE', 'RESERVE', 'BONUS'),
+      ('4107', 'REVENUE', 'RESERVE', 'CHARGEBACK'),
+
       -- 4110 - REV - VSC  
-      (237, 'REVENUE', 'VSC', 'BASE'),
-      (546, 'REVENUE', 'VSC', 'ADVANCE'),
-      (479, 'REVENUE', 'VSC', 'VOLUME_BONUS'),
-      (545, 'COST_OF_REVENUE', 'VSC', 'COST'), -- VSC Cost is negative revenue, treat as COR
-      (544, 'REVENUE', 'VSC', 'CHARGEBACK'),
-      
+      ('4110', 'REVENUE', 'VSC', 'BASE'),
+      ('4110A', 'REVENUE', 'VSC', 'ADVANCE'),
+      ('4110B', 'REVENUE', 'VSC', 'VOLUME_BONUS'),
+      ('4110C', 'REVENUE', 'VSC', 'COST'),
+      ('4111', 'REVENUE', 'VSC', 'CHARGEBACK'),
+
       -- 4120 - REV - GAP
-      (238, 'REVENUE', 'GAP', 'BASE'),
-      (547, 'REVENUE', 'GAP', 'ADVANCE'),
-      (480, 'REVENUE', 'GAP', 'VOLUME_BONUS'),
-      (548, 'COST_OF_REVENUE', 'GAP', 'COST'), -- GAP Cost is negative revenue, treat as COR
-      (549, 'REVENUE', 'GAP', 'CHARGEBACK'),
-      (525, 'REVENUE', 'GAP', 'REINSURANCE'), -- 4125 - GAP REINSURANCE
-      
+      ('4120', 'REVENUE', 'GAP', 'BASE'),
+      ('4120A', 'REVENUE', 'GAP', 'ADVANCE'),
+      ('4120B', 'REVENUE', 'GAP', 'VOLUME_BONUS'),
+      ('4120C', 'REVENUE', 'GAP', 'COST'),
+      ('4121', 'REVENUE', 'GAP', 'CHARGEBACK'),
+      ('4125', 'REVENUE', 'GAP', 'REINSURANCE'),
+
       -- 4130 - REV - DOC FEES
-      (239, 'REVENUE', 'DOC_FEES', 'BASE'),
-      (517, 'REVENUE', 'DOC_FEES', 'CHARGEBACK'),
-      
-      -- 4141 - REV - TITLING FEES
-      (451, 'REVENUE', 'TITLING_FEES', 'BASE'),
-      
+      ('4130', 'REVENUE', 'DOC_FEES', 'BASE'),
+      ('4130C', 'REVENUE', 'DOC_FEES', 'CHARGEBACK'),
+
+      -- 4140 - REV - TITLING FEES
+      ('4141', 'REVENUE', 'TITLING_FEES', 'BASE'),
+      ('4142', 'REVENUE', 'TITLING_FEES', 'BASE'),
+      ('4190', 'REVENUE', 'OTHER_REVENUE', 'BASE'),
+
       -- 5000 SERIES - COST OF REVENUE
+      -- 5110/5120 - VSC/GAP COR
+      ('5110', 'COST_OF_REVENUE', 'VSC', 'COST'),
+      ('5110A', 'COST_OF_REVENUE', 'VSC', 'ADVANCE'),
+      ('5120', 'COST_OF_REVENUE', 'GAP', 'COST'),
+      ('5120A', 'COST_OF_REVENUE', 'GAP', 'ADVANCE'),
+
       -- 5300 - DIRECT PEOPLE COST
-      (528, 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'FUNDING_CLERKS'), -- 5301
-      (552, 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'COMMISSION'),     -- 5302
-      (529, 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'TITLE_CLERKS'),   -- 5320
-      (530, 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'EMP_BENEFITS'),   -- 5330
-      (531, 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'PAYROLL_TAX'),    -- 5340
-      
-      -- 5400P - PAYOFF EXPENSE - PARENT
-      (532, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PAYOFF'),             -- 5400
-      (447, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'BANK_BUYOUT_FEES'),   -- 5520
-      (533, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'SALES_TAX'),          -- 5401
-      (534, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'REGISTRATION'),       -- 5402
-      (452, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_ONLY_FEES'),    -- 5141
-      (535, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_COR'),          -- 5530
-      (538, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'CUSTOMER_EXPERIENCE'), -- 5403
-      (539, 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PENALTIES'),          -- 5404
-      
+      ('5301', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'FUNDING_CLERKS'),
+      ('5304', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'IC_PAYOFF_TEAM'),
+      ('5305', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'OUTBOUND_COMMISSION'),
+      ('5320', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'TITLE_CLERKS'),
+      ('5330', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'EMP_BENEFITS'),
+      ('5340', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'PAYROLL_TAX'),
+
+      -- 5400 - PAYOFF EXPENSE
+      ('5400', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PAYOFF'),
+      ('5401', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'SALES_TAX'),
+      ('5402', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'REGISTRATION'),
+      ('5403', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'CUSTOMER_EXPERIENCE'),
+      ('5404', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PENALTIES'),
+      ('5520', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'BANK_BUYOUT_FEES'),
+      ('5141', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_ONLY_FEES'),
+      ('5530', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_COR'),
+
       -- 5500 - COR - OTHER
-      (551, 'COST_OF_REVENUE', 'OTHER_COR', 'REPO'),                    -- 5199
-      (540, 'COST_OF_REVENUE', 'OTHER_COR', 'POSTAGE'),                 -- 5510
-      
-      -- 6000 SERIES - PEOPLE COST (Operating Expense)
-      (600, 'EXPENSE', 'PEOPLE_COST', 'MANAGER_COMP'),      -- 6000
-      (601, 'EXPENSE', 'PEOPLE_COST', 'COMMISSION'),        -- 6010
-      (602, 'EXPENSE', 'PEOPLE_COST', 'SALESPERSON_GUARANTEE'), -- 6011
-      (603, 'EXPENSE', 'PEOPLE_COST', 'HOURLY'),            -- 6030
-      (604, 'EXPENSE', 'PEOPLE_COST', 'DEVELOPER_COMP'),    -- 6040
-      (605, 'EXPENSE', 'PEOPLE_COST', 'IC_DEVELOPER_COMP'), -- 6041
-      (610, 'EXPENSE', 'PEOPLE_COST', 'EMP_BENEFITS'),      -- 6100
-      (611, 'EXPENSE', 'PEOPLE_COST', 'EMP_ENGAGEMENT'),    -- 6101
-      (612, 'EXPENSE', 'PEOPLE_COST', 'PTO'),               -- 6110
-      (620, 'EXPENSE', 'PEOPLE_COST', 'PAYROLL_TAX'),       -- 6200
-      
-      -- 6500 - MARKETING
-      (651, 'EXPENSE', 'MARKETING', 'LEAD_SOURCE'),         -- 6510
-      (652, 'EXPENSE', 'MARKETING', 'DIRECT_MAIL'),         -- 6520
-      (653, 'EXPENSE', 'MARKETING', 'DIGITAL_MARKETING'),   -- 6530
-      (654, 'EXPENSE', 'MARKETING', 'SMS_MARKETING'),       -- 6540
-      (656, 'EXPENSE', 'MARKETING', 'PROMOTIONAL'),         -- 6560
-      (657, 'EXPENSE', 'MARKETING', 'AFFILIATE'),           -- 6570
-      
-      -- 7000 - G&A EXPENSE
-      (710, 'EXPENSE', 'GA_EXPENSE', 'INSURANCE'),          -- 7100
-      (711, 'EXPENSE', 'GA_EXPENSE', 'OFFICE_SUPPLIES'),    -- 7110
-      (712, 'EXPENSE', 'GA_EXPENSE', 'POSTAGE'),            -- 7120
-      (713, 'EXPENSE', 'GA_EXPENSE', 'RECRUITING'),         -- 7125
-      (714, 'EXPENSE', 'GA_EXPENSE', 'PROFESSIONAL_FEES'),  -- 7130
-      (715, 'EXPENSE', 'GA_EXPENSE', 'BUSINESS_LICENSE'),   -- 7131
-      (716, 'EXPENSE', 'GA_EXPENSE', 'SUBSCRIPTION_FEES'),  -- 7140
-      (717, 'EXPENSE', 'GA_EXPENSE', 'BANK_FEES'),          -- 7141
-      (718, 'EXPENSE', 'GA_EXPENSE', 'TRAVEL_ENTERTAINMENT'), -- 7160
-      (719, 'EXPENSE', 'GA_EXPENSE', 'RENT_LEASE'),         -- 7170
-      (720, 'EXPENSE', 'GA_EXPENSE', 'RENT_AMORTIZATION'),  -- 7170A
-      (721, 'EXPENSE', 'GA_EXPENSE', 'UTILITIES'),          -- 7171
-      (722, 'EXPENSE', 'GA_EXPENSE', 'BUILDING_MAINTENANCE'), -- 7172
-      (724, 'EXPENSE', 'GA_EXPENSE', 'VEHICLE_MAINTENANCE'), -- 7174
-      (725, 'EXPENSE', 'GA_EXPENSE', 'DEPRECIATION'),       -- 7175
-      (726, 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION'),       -- 7176
-      (728, 'EXPENSE', 'GA_EXPENSE', 'INTERNET_TELEPHONE'), -- 7180
-      (729, 'EXPENSE', 'GA_EXPENSE', 'SALES_EXPENSE'),      -- 7190
-      
-      -- 8000-9000 SERIES - OTHER INCOME/EXPENSE
-      (801, 'OTHER_EXPENSE', 'INCOME_TAX', 'STATE'),        -- 8010
-      (802, 'OTHER_EXPENSE', 'INCOME_TAX', 'FEDERAL'),      -- 8011
-      (901, 'OTHER_INCOME', 'INTEREST', 'INTEREST_INCOME'), -- 9001
-      (902, 'OTHER_INCOME', 'INVESTMENT', 'DIVIDEND_INCOME'), -- 9001D
-      (903, 'OTHER_INCOME', 'INVESTMENT', 'GAIN_LOSS_ON_SALE'), -- 9003
-      (907, 'OTHER_EXPENSE', 'NON_PROFIT', 'DONATIONS'),    -- 9007
-      (910, 'OTHER_EXPENSE', 'NON_RECURRING', 'EXPENSES')   -- 9010
-    AS t(account_id, transaction_type, transaction_category, transaction_subcategory)
+      ('5199', 'COST_OF_REVENUE', 'OTHER_COR', 'REPO'),
+      ('5510', 'COST_OF_REVENUE', 'OTHER_COR', 'POSTAGE'),
+
+      -- GA_EXPENSE overrides
+      ('7175', 'EXPENSE', 'GA_EXPENSE', 'DEPRECIATION'),
+      ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION')
+    AS t(account_number, transaction_type, transaction_category, transaction_subcategory)
   ),
   
   metric_group_mappings AS (
@@ -314,10 +277,10 @@ USING (
     COALESCE(
       bao.transaction_type,
       CASE 
-        WHEN a.id BETWEEN 4000 AND 4999 THEN 'REVENUE'
-        WHEN a.id BETWEEN 5000 AND 5999 THEN 'COST_OF_REVENUE'
-        WHEN a.id BETWEEN 6000 AND 7999 THEN 'EXPENSE'
-        WHEN a.id BETWEEN 8000 AND 8999 THEN 
+        WHEN a.acctnumber BETWEEN '4000' AND '4999' THEN 'REVENUE'
+        WHEN a.acctnumber BETWEEN '5000' AND '5999' THEN 'COST_OF_REVENUE'
+        WHEN a.acctnumber BETWEEN '6000' AND '7999' THEN 'EXPENSE'
+        WHEN a.acctnumber BETWEEN '8000' AND '8999' THEN 
           CASE 
             WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'OTHER_INCOME'
             ELSE 'OTHER_EXPENSE'
@@ -335,22 +298,22 @@ USING (
     COALESCE(
       bao.transaction_category,
       CASE 
-        WHEN a.id BETWEEN 4100 AND 4109 THEN 'RESERVE'
-        WHEN a.id BETWEEN 4110 AND 4119 THEN 'VSC'
-        WHEN a.id BETWEEN 4120 AND 4129 THEN 'GAP'
-        WHEN a.id BETWEEN 4130 AND 4139 THEN 'DOC_FEES'
-        WHEN a.id BETWEEN 4140 AND 4149 THEN 'TITLING_FEES'
-        WHEN a.id BETWEEN 4000 AND 4999 THEN 'GENERAL_REVENUE'
-        WHEN a.id BETWEEN 5300 AND 5399 THEN 'DIRECT_PEOPLE_COST'
-        WHEN a.id BETWEEN 5400 AND 5499 THEN 'PAYOFF_EXPENSE'
-        WHEN a.id BETWEEN 5500 AND 5599 THEN 'OTHER_COR'
-        WHEN a.id BETWEEN 5000 AND 5999 THEN 'COST_OF_GOODS'
-        WHEN a.id BETWEEN 6000 AND 6499 THEN 'PEOPLE_COST'
-        WHEN a.id BETWEEN 6500 AND 6599 THEN 'MARKETING'
-        WHEN a.id BETWEEN 7000 AND 7999 THEN 'GA_EXPENSE'
-        WHEN a.id BETWEEN 8000 AND 8099 THEN 'INCOME_TAX'
-        WHEN a.id BETWEEN 9000 AND 9099 AND UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'INTEREST'
-        WHEN a.id BETWEEN 9000 AND 9099 THEN 'NON_OPERATING'
+        WHEN a.acctnumber BETWEEN '4100' AND '4109' THEN 'RESERVE'
+        WHEN a.acctnumber BETWEEN '4110' AND '4119' THEN 'VSC'
+        WHEN a.acctnumber BETWEEN '4120' AND '4129' THEN 'GAP'
+        WHEN a.acctnumber BETWEEN '4130' AND '4139' THEN 'DOC_FEES'
+        WHEN a.acctnumber BETWEEN '4140' AND '4149' THEN 'TITLING_FEES'
+        WHEN a.acctnumber BETWEEN '4000' AND '4999' THEN 'GENERAL_REVENUE'
+        WHEN a.acctnumber BETWEEN '5300' AND '5399' THEN 'DIRECT_PEOPLE_COST'
+        WHEN a.acctnumber BETWEEN '5400' AND '5499' THEN 'PAYOFF_EXPENSE'
+        WHEN a.acctnumber BETWEEN '5500' AND '5599' THEN 'OTHER_COR'
+        WHEN a.acctnumber BETWEEN '5000' AND '5999' THEN 'COST_OF_GOODS'
+        WHEN a.acctnumber BETWEEN '6000' AND '6499' THEN 'PEOPLE_COST'
+        WHEN a.acctnumber BETWEEN '6500' AND '6599' THEN 'MARKETING'
+        WHEN a.acctnumber BETWEEN '7000' AND '7999' THEN 'GA_EXPENSE'
+        WHEN a.acctnumber BETWEEN '8000' AND '8099' THEN 'INCOME_TAX'
+        WHEN a.acctnumber BETWEEN '9000' AND '9099' AND UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'INTEREST'
+        WHEN a.acctnumber BETWEEN '9000' AND '9099' THEN 'NON_OPERATING'
         WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE') THEN 'GENERAL_REVENUE'
         WHEN UPPER(a.accttype) = 'OTHERINCOME' THEN 'OTHER_INCOME'
         WHEN UPPER(a.accttype) = 'EXPENSE' THEN 'GENERAL_EXPENSE'
@@ -399,9 +362,9 @@ USING (
     -- High-level P&L boolean flags for easy filtering
     (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4120','4120A','4120B','4120C','4121','4130','4130C','4141','4142','4190')) as is_total_revenue,
     (a.acctnumber IN ('5110','5110A','5120A','5120','5301','5304','5305','5320','5330','5340','5400','5401','5520','5402','5141','5530','5403','5404','5199','5510')) as is_cost_of_revenue,
-    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4120','4120A','4120B','4120C','4121','4130','4130C','4141','4142','4190','5110','5110A','5120A','5120','5301','5304','5305','5320','5330','5340','5400','5401','5520','5402','5141','5530','5403','5404','5199','5510')) as is_gross_profit,
+    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4120','4120A','4120B','4120C','4121','4130','4130C','4141','4142','4190','5110','5110A','5120A','5120','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5400','5403','5404','5199','5510')) as is_gross_profit,
     (a.acctnumber IN ('6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000')) as is_operating_expense,
-    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4120','4120A','4120B','4120C','4121','4130','4130C','4141','4142','4190','5110','5110A','5120A','5120','5301','5304','5305','5320','5330','5340','5400','5401','5520','5402','5141','5530','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000')) as is_net_ordinary_revenue,
+    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4120','4120A','4120B','4120C','4121','4130','4130C','4141','4142','4190','5110','5110A','5120A','5120','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5400','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000')) as is_net_ordinary_revenue,
     (a.acctnumber IN ('9001','9001D','8010','8011','9007','9010')) as is_other_income_expense,
     (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4120','4120A','4120B','4120C','4121','4130','4130C','4141','4142','4190','5110','5110A','5120A','5120','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5400','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000','9001','9001D','8010','8011','9007','9010')) as is_net_income,
     
@@ -424,7 +387,7 @@ USING (
     a.externalid AS external_id,
     'bronze.ns.account' AS _source_table
   FROM bronze.ns.account a
-  LEFT JOIN business_account_overrides bao ON a.id = bao.account_id
+  LEFT JOIN business_account_overrides bao ON a.acctnumber = bao.account_number
   LEFT JOIN metric_group_mappings mgm_rev ON a.acctnumber = mgm_rev.account_number AND mgm_rev.metric_type = 'REVENUE'
   LEFT JOIN metric_group_mappings mgm_cor ON a.acctnumber = mgm_cor.account_number AND mgm_cor.metric_type = 'COST_OF_REVENUE'
   LEFT JOIN metric_group_mappings mgm_exp ON a.acctnumber = mgm_exp.account_number AND mgm_exp.metric_type = 'EXPENSE'

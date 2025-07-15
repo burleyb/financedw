@@ -5,12 +5,12 @@ alwaysApply: true
 ---
 # Hex Visualization Layer
 
-Hex provides the visual layer and BI query tool for the data warehouse.
+Metabase provides the visual layer and BI query tool for the data warehouse.
 
 ## Connection
 
-- Hex connects to Databricks via JDBC/ODBC
-- Connection parameters are stored in Hex project settings
+- Metabase connects to Databricks via JDBC/ODBC
+- Connection parameters are stored in Metabase project settings
 - Queries execute against the star schema tables in Databricks
 
 ## Components
@@ -33,5 +33,5 @@ Hex provides the visual layer and BI query tool for the data warehouse.
 
 - Use parameterized queries for interactive filtering
 - Cache results when appropriate for performance
-- Implement row-level security through Hex's security features
+- Implement row-level security through Metabase's security features
 - Follow naming conventions for consistency

@@ -204,6 +204,9 @@ USING (
           
           -- 5500 - COR - OTHER
           ('5199', 'COST_OF_REVENUE', 'OTHER_COR', 'REPO'),
+          -- GA_EXPENSE overrides for Depreciation & Amortization
+          ('7175', 'EXPENSE', 'GA_EXPENSE', 'DEPRECIATION'),
+          ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION'),
           ('5510', 'COST_OF_REVENUE', 'OTHER_COR', 'POSTAGE')
           
         AS t(account_number, transaction_type, transaction_category, transaction_subcategory)
@@ -220,11 +223,11 @@ USING (
         bao.transaction_type,
         CASE 
           -- Income Statement account number classification (matches your income statement structure)
-          WHEN ata.account_id BETWEEN 4000 AND 4999 THEN 'REVENUE'                    -- 4000 series = Revenue
-          WHEN ata.account_id BETWEEN 5000 AND 5999 THEN 'COST_OF_REVENUE'           -- 5000 series = Cost of Revenue
-          WHEN ata.account_id BETWEEN 6000 AND 7999 THEN 'EXPENSE'                   -- 6000-7000 series = Operating Expenses
-          WHEN ata.account_id BETWEEN 8000 AND 8999 THEN 'OTHER_EXPENSE'             -- 8000 series = Other Expenses (taxes)
-          WHEN ata.account_id BETWEEN 9000 AND 9999 THEN 
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 THEN 'REVENUE'                    -- 4000 series = Revenue
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5000 AND 5999 THEN 'COST_OF_REVENUE'           -- 5000 series = Cost of Revenue
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 6000 AND 7999 THEN 'EXPENSE'                   -- 6000-7000 series = Operating Expenses
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 8000 AND 8999 THEN 'OTHER_EXPENSE'             -- 8000 series = Other Expenses (taxes)
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 9000 AND 9999 THEN 
             CASE 
               WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'OTHER_INCOME'  -- 9000 series income
               ELSE 'OTHER_EXPENSE'                                                                 -- 9000 series expense
@@ -244,28 +247,28 @@ USING (
         bao.transaction_category,
         CASE 
           -- 4000 series revenue subcategorization
-          WHEN ata.account_id BETWEEN 4100 AND 4109 THEN 'RESERVE'
-          WHEN ata.account_id BETWEEN 4110 AND 4119 THEN 'VSC'
-          WHEN ata.account_id BETWEEN 4120 AND 4129 THEN 'GAP'
-          WHEN ata.account_id BETWEEN 4130 AND 4139 THEN 'DOC_FEES'
-          WHEN ata.account_id BETWEEN 4140 AND 4149 THEN 'TITLING_FEES'
-          WHEN ata.account_id BETWEEN 4000 AND 4999 THEN 'GENERAL_REVENUE'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4100 AND 4109 THEN 'RESERVE'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4110 AND 4119 THEN 'VSC'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4120 AND 4129 THEN 'GAP'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4130 AND 4139 THEN 'DOC_FEES'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4140 AND 4149 THEN 'TITLING_FEES'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 THEN 'GENERAL_REVENUE'
           
           -- 5000 series cost of revenue subcategorization
-          WHEN ata.account_id BETWEEN 5300 AND 5399 THEN 'DIRECT_PEOPLE_COST'
-          WHEN ata.account_id BETWEEN 5400 AND 5499 THEN 'PAYOFF_EXPENSE'
-          WHEN ata.account_id BETWEEN 5500 AND 5599 THEN 'OTHER_COR'
-          WHEN ata.account_id BETWEEN 5000 AND 5999 THEN 'COST_OF_GOODS'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5300 AND 5399 THEN 'DIRECT_PEOPLE_COST'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5400 AND 5499 THEN 'PAYOFF_EXPENSE'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5500 AND 5599 THEN 'OTHER_COR'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5000 AND 5999 THEN 'COST_OF_GOODS'
           
           -- 6000-7000 series expense subcategorization
-          WHEN ata.account_id BETWEEN 6000 AND 6499 THEN 'PEOPLE_COST'
-          WHEN ata.account_id BETWEEN 6500 AND 6599 THEN 'MARKETING'
-          WHEN ata.account_id BETWEEN 7000 AND 7999 THEN 'GA_EXPENSE'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 6000 AND 6499 THEN 'PEOPLE_COST'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 6500 AND 6599 THEN 'MARKETING'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 7000 AND 7999 THEN 'GA_EXPENSE'
           
           -- 8000-9000 series other income/expense
-          WHEN ata.account_id BETWEEN 8000 AND 8099 THEN 'INCOME_TAX'
-          WHEN ata.account_id BETWEEN 9000 AND 9099 AND UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'INTEREST'
-          WHEN ata.account_id BETWEEN 9000 AND 9099 THEN 'NON_OPERATING'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 8000 AND 8099 THEN 'INCOME_TAX'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 9000 AND 9099 AND UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'INTEREST'
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 9000 AND 9099 THEN 'NON_OPERATING'
           
           -- Fallback to NetSuite account type classification
           WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE') THEN 'GENERAL_REVENUE'
@@ -645,6 +648,7 @@ USING (
   ),
   
   unallocated_expenses AS (
+    -- Expenses coming from transactionline (standard vendor bills, etc.)
     SELECT
         DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
         tl.expenseaccount as account,
@@ -663,6 +667,8 @@ USING (
         AND tl.foreignamount != 0
         AND tl.expenseaccount NOT IN (267, 269, 498, 499) -- Exclude 5110, 5120, 5110A, 5120A from unallocated too
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
+
+
   ),
   
 
@@ -684,7 +690,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(so.amount * 100) AS BIGINT) as amount_cents,
+      CAST(so.amount * 100 AS BIGINT) as amount_cents,
       CAST(so.amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -722,7 +728,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(vme.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(vme.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(vme.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -752,7 +758,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(vor.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(vor.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(vor.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_ONLY_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -785,7 +791,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(voe.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(voe.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(voe.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_ONLY_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -819,7 +825,7 @@ USING (
       mvr.transaction_type,
       mvr.transaction_category,
       mvr.transaction_subcategory,
-      CAST(ROUND(mvr.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(mvr.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(mvr.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_SPLIT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -850,7 +856,7 @@ USING (
       mve.transaction_type,
       mve.transaction_category,
       mve.transaction_subcategory,
-      CAST(ROUND(mve.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(mve.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(mve.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_SPLIT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -881,7 +887,7 @@ USING (
       mvr.transaction_type,
       mvr.transaction_category,
       mvr.transaction_subcategory,
-      CAST(ROUND(mvr.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(mvr.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(mvr.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_ORPHAN' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -910,7 +916,7 @@ USING (
       mve.transaction_type,
       mve.transaction_category,
       mve.transaction_subcategory,
-      CAST(ROUND(mve.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(mve.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(mve.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_ORPHAN' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -939,7 +945,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(vrm.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(vrm.total_amount * 100 AS BIGINT) as amount_cents,
       CAST(vrm.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_LOOKUP_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -972,7 +978,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND((mvr.total_amount / NULLIF(dpp.deal_count, 0)) * 100) AS BIGINT) as amount_cents,
+      CAST((mvr.total_amount / NULLIF(dpp.deal_count, 0)) * 100 AS BIGINT) as amount_cents,
       CAST(mvr.total_amount / NULLIF(dpp.deal_count, 0) AS DECIMAL(15,2)) as amount_dollars,
       'PERIOD_ALLOCATION' as allocation_method,
       CAST(1.0 / NULLIF(dpp.deal_count, 0) AS DECIMAL(10,6)) as allocation_factor,
@@ -1002,7 +1008,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND((mve.total_amount / NULLIF(dpp.deal_count, 0)) * 100) AS BIGINT) as amount_cents,
+      CAST((mve.total_amount / NULLIF(dpp.deal_count, 0)) * 100 AS BIGINT) as amount_cents,
       CAST(mve.total_amount / NULLIF(dpp.deal_count, 0) AS DECIMAL(15,2)) as amount_dollars,
       'PERIOD_ALLOCATION' as allocation_method,
       CAST(1.0 / NULLIF(dpp.deal_count, 0) AS DECIMAL(10,6)) as allocation_factor,
@@ -1032,7 +1038,7 @@ USING (
       'REVENUE' as transaction_type,
       'GENERAL_REVENUE' as transaction_category,
       'STANDARD' as transaction_subcategory,
-      CAST(ROUND(total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(total_amount * 100 AS BIGINT) as amount_cents,
       CAST(total_amount AS DECIMAL(15,2)) as amount_dollars,
       'UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -1059,7 +1065,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(total_amount * 100 AS BIGINT) as amount_cents,
       CAST(total_amount AS DECIMAL(15,2)) as amount_dollars,
       'UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
