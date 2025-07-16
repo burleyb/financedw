@@ -331,7 +331,7 @@ USING (
     SELECT
         UPPER(t.custbody_leaseend_vinno) as vin,
         tl.expenseaccount as account,
-        SUM(-tl.foreignamount) AS total_amount
+        SUM(tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -340,7 +340,7 @@ USING (
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND t.custbody_le_deal_id IS NOT NULL
         AND t.custbody_le_deal_id != 0
-        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE')
+        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
         AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -362,7 +362,7 @@ USING (
         YEAR(t.trandate) as transaction_year,
         MONTH(t.trandate) as transaction_month,
         t.trandate,
-        SUM(-tl.foreignamount) AS total_amount
+        SUM(tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -370,7 +370,7 @@ USING (
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         -- VIN_ONLY: All single VINs (let final transaction logic handle deduplication)
-        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE')
+        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
         AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -378,6 +378,30 @@ USING (
         AND t.trandate IS NOT NULL
         AND tl.expenseaccount NOT IN (267, 269, 498, 499) -- Exclude 5110, 5120, 5110A, 5120A from VIN-only matching too
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  ),
+  
+  -- NEW: Deal-only expenses (deal_id present but VIN missing). Captures vendor bills / journals that
+  -- post to expense & COR accounts yet have no VIN recorded.
+  deal_no_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id       AS deal_id,
+        tl.expenseaccount           AS account,
+        t.trandate                  AS trandate,
+        MONTH(t.trandate)           AS transaction_month,
+        YEAR(t.trandate)            AS transaction_year,
+        SUM(tl.foreignamount)       AS total_amount
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE (t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0)
+      AND (t.custbody_leaseend_vinno IS NULL OR LENGTH(t.custbody_leaseend_vinno) != 17)
+      AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
+      AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
+      AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+      AND tl.expenseaccount NOT IN (267, 269, 498, 499)
+    GROUP BY t.custbody_le_deal_id, tl.expenseaccount, t.trandate, MONTH(t.trandate), YEAR(t.trandate)
   ),
   
   
@@ -390,7 +414,7 @@ USING (
           t.custbody_leaseend_vinno as vin_list,
           tl.expenseaccount as account,
           -- SIGN CORRECTION: Negate foreignamount for expenses to match income statement format
-          -tl.foreignamount as total_amount,
+          tl.foreignamount as total_amount,
           am.transaction_type,
           am.transaction_category,
           am.transaction_subcategory
@@ -399,7 +423,7 @@ USING (
       INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
       WHERE t.custbody_leaseend_vinno IS NOT NULL
           AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
-          AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE')
+          AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
           AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -417,13 +441,18 @@ USING (
           mvr.transaction_category,
           mvr.transaction_subcategory,
           UPPER(TRIM(vin_element.col)) as individual_vin,
-          -- Count VINs in the list for equal splitting
           SIZE(SPLIT(mvr.vin_list, ',')) as vin_count,
-          -- Split amount equally across all VINs
-          mvr.total_amount / SIZE(SPLIT(mvr.vin_list, ',')) as split_amount
+          vin_element.pos                                   as vin_pos,
+          -- integer cents for accuracy
+          CAST(ROUND(mvr.total_amount * 100) AS BIGINT)                             AS total_cents,
+          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) AS base_split_cents,
+          pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) AS remainder_cents,
+          -- allocate the remainder (1 cent) to first `remainder_cents` VINs
+          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) + 
+          CASE WHEN vin_element.pos < pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) THEN 1 ELSE 0 END AS split_cents
       FROM multi_vin_raw mvr
-      LATERAL VIEW EXPLODE(SPLIT(mvr.vin_list, ',')) vin_element AS col
-      WHERE LENGTH(TRIM(vin_element.col)) >= 5  -- Accept 5+ character identifiers (both 6-char IDs and 17-char VINs)
+      LATERAL VIEW posexplode(SPLIT(mvr.vin_list, ',')) vin_element AS pos, col
+      WHERE LENGTH(TRIM(col)) >= 5
     )
     
     SELECT
@@ -435,7 +464,7 @@ USING (
         vs.transaction_type,
         vs.transaction_category,
         vs.transaction_subcategory,
-        SUM(vs.split_amount) as total_amount
+        SUM(vs.split_cents) / 100.0 as total_amount
     FROM vin_splits vs
     GROUP BY vs.individual_vin, vs.account, vs.trandate, YEAR(vs.trandate), MONTH(vs.trandate),
              vs.transaction_type, vs.transaction_category, vs.transaction_subcategory
@@ -473,13 +502,18 @@ USING (
           mvr.transaction_category,
           mvr.transaction_subcategory,
           UPPER(TRIM(vin_element.col)) as individual_vin,
-          -- Count VINs in the list for equal splitting
           SIZE(SPLIT(mvr.vin_list, ',')) as vin_count,
-          -- Split amount equally across all VINs
-          mvr.total_amount / SIZE(SPLIT(mvr.vin_list, ',')) as split_amount
+          vin_element.pos                                   as vin_pos,
+          -- integer cents for accuracy
+          CAST(ROUND(mvr.total_amount * 100) AS BIGINT)                             AS total_cents,
+          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) AS base_split_cents,
+          pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) AS remainder_cents,
+          -- allocate the remainder (1 cent) to first `remainder_cents` VINs
+          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) + 
+          CASE WHEN vin_element.pos < pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) THEN 1 ELSE 0 END AS split_cents
       FROM multi_vin_raw mvr
-      LATERAL VIEW EXPLODE(SPLIT(mvr.vin_list, ',')) vin_element AS col
-      WHERE LENGTH(TRIM(vin_element.col)) >= 5  -- Accept 5+ character identifiers (both 6-char IDs and 17-char VINs)
+      LATERAL VIEW posexplode(SPLIT(mvr.vin_list, ',')) vin_element AS pos, col
+      WHERE LENGTH(TRIM(col)) >= 5
     )
     
     SELECT
@@ -491,7 +525,7 @@ USING (
         vs.transaction_type,
         vs.transaction_category,
         vs.transaction_subcategory,
-        SUM(vs.split_amount) as total_amount
+        SUM(vs.split_cents) / 100.0 as total_amount
     FROM vin_splits vs
     GROUP BY vs.individual_vin, vs.account, vs.trandate, YEAR(vs.trandate), MONTH(vs.trandate),
              vs.transaction_type, vs.transaction_category, vs.transaction_subcategory
@@ -613,7 +647,7 @@ USING (
         rrwv.revenue_recognition_period,
         tl.expenseaccount as account,
         -- SIGN CORRECTION: Negate foreignamount for expenses to match income statement format
-        SUM(-tl.foreignamount) AS total_amount
+        SUM(tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN bronze.leaseend_db_public.deals d ON t.custbody_le_deal_id = d.id
@@ -621,7 +655,7 @@ USING (
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
     WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
         AND t.custbody_le_deal_id IS NOT NULL
-        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE')
+        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
         AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -653,14 +687,14 @@ USING (
         DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
         tl.expenseaccount as account,
         -- SIGN CORRECTION: Negate foreignamount for expenses to match income statement format
-        SUM(-tl.foreignamount) AS total_amount
+        SUM(tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
     WHERE (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
         AND t.custbody_leaseend_vinno IS NULL  -- ONLY transactions with NO VIN should be unallocated
         AND t.trandate IS NOT NULL
-        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE')
+        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
         AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -690,7 +724,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(so.amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(so.amount * 100) AS BIGINT) as amount_cents,
       CAST(so.amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -712,7 +746,7 @@ USING (
       AND so.amount != 0
 
     UNION ALL
-
+ 
     -- VIN-matching expense transactions
     SELECT
       CONCAT(rrwv.deal_id, '_', vme.account, '_EXPENSE') as transaction_key,
@@ -728,7 +762,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(vme.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(vme.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(vme.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -758,7 +792,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(vor.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(vor.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(vor.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_ONLY_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -791,7 +825,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(voe.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(voe.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(voe.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_ONLY_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -825,7 +859,7 @@ USING (
       mvr.transaction_type,
       mvr.transaction_category,
       mvr.transaction_subcategory,
-      CAST(mvr.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(mvr.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(mvr.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_SPLIT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -856,7 +890,7 @@ USING (
       mve.transaction_type,
       mve.transaction_category,
       mve.transaction_subcategory,
-      CAST(mve.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(mve.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(mve.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_SPLIT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -887,7 +921,7 @@ USING (
       mvr.transaction_type,
       mvr.transaction_category,
       mvr.transaction_subcategory,
-      CAST(mvr.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(mvr.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(mvr.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_ORPHAN' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -916,7 +950,7 @@ USING (
       mve.transaction_type,
       mve.transaction_category,
       mve.transaction_subcategory,
-      CAST(mve.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(mve.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(mve.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_ORPHAN' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -945,7 +979,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(vrm.total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(vrm.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(vrm.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_LOOKUP_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -978,7 +1012,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST((mvr.total_amount / NULLIF(dpp.deal_count, 0)) * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND((mvr.total_amount / NULLIF(dpp.deal_count, 0)) * 100) AS BIGINT) as amount_cents,
       CAST(mvr.total_amount / NULLIF(dpp.deal_count, 0) AS DECIMAL(15,2)) as amount_dollars,
       'PERIOD_ALLOCATION' as allocation_method,
       CAST(1.0 / NULLIF(dpp.deal_count, 0) AS DECIMAL(10,6)) as allocation_factor,
@@ -1008,7 +1042,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST((mve.total_amount / NULLIF(dpp.deal_count, 0)) * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND((mve.total_amount / NULLIF(dpp.deal_count, 0)) * 100) AS BIGINT) as amount_cents,
       CAST(mve.total_amount / NULLIF(dpp.deal_count, 0) AS DECIMAL(15,2)) as amount_dollars,
       'PERIOD_ALLOCATION' as allocation_method,
       CAST(1.0 / NULLIF(dpp.deal_count, 0) AS DECIMAL(10,6)) as allocation_factor,
@@ -1038,7 +1072,7 @@ USING (
       'REVENUE' as transaction_type,
       'GENERAL_REVENUE' as transaction_category,
       'STANDARD' as transaction_subcategory,
-      CAST(total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(total_amount * 100) AS BIGINT) as amount_cents,
       CAST(total_amount AS DECIMAL(15,2)) as amount_dollars,
       'UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -1065,7 +1099,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(total_amount * 100 AS BIGINT) as amount_cents,
+      CAST(ROUND(total_amount * 100) AS BIGINT) as amount_cents,
       CAST(total_amount AS DECIMAL(15,2)) as amount_dollars,
       'UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
@@ -1075,6 +1109,66 @@ USING (
       CAST(NULL AS INT) AS credit_memo_time_key
     FROM unallocated_expenses ue
     INNER JOIN account_mappings am ON ue.account = am.account_id
+
+    UNION ALL
+
+    -- Deal-only expense transactions (deal_id present but VIN missing)
+    SELECT
+      CONCAT(dnve.deal_id, '_', dnve.account, '_DEAL_ONLY_EXPENSE') as transaction_key,
+      CAST(dnve.deal_id AS STRING) as deal_key,
+      CAST(dnve.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(dnve.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(dnve.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(dnve.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(dnve.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      'NO_VIN' as vin,
+      dnve.transaction_month as month,
+      dnve.transaction_year as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND(dnve.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(dnve.total_amount AS DECIMAL(15,2)) as amount_dollars,
+      'DEAL_ONLY' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key
+    FROM deal_no_vin_expenses dnve
+    INNER JOIN account_mappings am ON dnve.account = am.account_id
+
+    UNION ALL
+
+    -- VIN-only revenue transactions with no matching deal (orphan VIN)
+    SELECT
+      CONCAT('VIN_ORPHAN_', vor.vin, '_', vor.account, '_', vor.transaction_period, '_REVENUE') as transaction_key,
+      NULL as deal_key,
+      CAST(vor.account AS STRING) as account_key,
+      COALESCE(CAST(REPLACE(vor.transaction_period, '-', '') || '01' AS BIGINT), 0) AS netsuite_posting_date_key,
+      CAST(0 AS BIGINT) AS netsuite_posting_time_key,
+      COALESCE(CAST(REPLACE(vor.transaction_period, '-', '') || '01' AS INT), 0) AS revenue_recognition_date_key,
+      CAST(0 AS INT) AS revenue_recognition_time_key,
+      vor.vin,
+      vor.transaction_month as month,
+      vor.transaction_year as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND(vor.total_amount * 100) AS BIGINT) as amount_cents,
+      CAST(vor.total_amount AS DECIMAL(15,2)) as amount_dollars,
+      'VIN_ORPHAN' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.salesinvoiced' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key
+    FROM vin_only_revenue vor
+    INNER JOIN account_mappings am ON vor.account = am.account_id
+    LEFT JOIN (
+        SELECT vin FROM deal_vins GROUP BY vin
+    ) dv ON vor.vin = dv.vin
+    WHERE dv.vin IS NULL
   ),
   final_transactions AS (
     SELECT
