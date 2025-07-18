@@ -119,6 +119,31 @@ USING (
     GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   )
 
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
     SELECT DISTINCT
         c.deal_id,
         UPPER(c.vin) as vin
@@ -191,6 +216,31 @@ USING (
     GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   )
 
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
     SELECT UPPER(t.custbody_leaseend_vinno) AS vin, MIN(DATE(t.trandate)) AS credit_memo_date
     FROM bronze.ns.transaction t
     WHERE t.abbrevtype = 'CREDITMEMO'
@@ -201,6 +251,31 @@ USING (
   ),
   
   revenue_recognition_with_vins AS (
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
   -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
   short_vin_expenses AS (
     SELECT
@@ -316,6 +391,31 @@ USING (
     GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   )
 
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
     SELECT 
         revenue_recognition_period,
         COUNT(DISTINCT deal_id) as deal_count
@@ -328,6 +428,31 @@ USING (
   account_mappings AS (
     WITH all_transactional_accounts AS (
       -- Find ALL accounts that have transactions (this is the complete universe)
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
   -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
   short_vin_expenses AS (
     SELECT
@@ -434,6 +559,31 @@ USING (
     GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   )
 
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
       SELECT DISTINCT expenseaccount as account_id
       FROM bronze.ns.transactionline
       WHERE expenseaccount IS NOT NULL
@@ -442,6 +592,31 @@ USING (
       UNION
       
       -- Include accounts from transactionaccountingline (this is where many accounts appear)
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
   -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
   short_vin_expenses AS (
     SELECT
@@ -551,6 +726,31 @@ USING (
     GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   )
 
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
       SELECT 
         a.id as account_id,
         bo.transaction_type,
@@ -558,6 +758,31 @@ USING (
         bo.transaction_subcategory
       FROM bronze.ns.account a
       INNER JOIN (
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
   -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
   short_vin_expenses AS (
     SELECT
@@ -677,6 +902,31 @@ USING (
     )
     
     -- Include ALL transactional accounts with appropriate classification
+  -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
+  short_vin_expenses AS (
+    SELECT
+        t.custbody_le_deal_id                   AS deal_id,
+        UPPER(t.custbody_leaseend_vinno)        AS vin,
+        tl.expenseaccount                       AS account,
+        DATE_FORMAT(t.trandate,'yyyy-MM')       AS transaction_period,
+        YEAR(t.trandate)                        AS transaction_year,
+        MONTH(t.trandate)                       AS transaction_month,
+        t.trandate,
+        SUM(tl.foreignamount)                   AS total_amount  -- raw NetSuite sign
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am     ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno IS NOT NULL
+      AND ( LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '% %' )
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL','INV','CREDMEM','GENJRNL')
+      AND am.transaction_type IN ('EXPENSE','COST_OF_REVENUE','OTHER_EXPENSE')
+      AND tl.foreignamount > 0 -- Was missing this filter
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+    GROUP BY t.custbody_le_deal_id, UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate,'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
+  )
+
   -- Short VIN expenses: VIN present but not 17-char or contains spaces; deal_id present
   short_vin_expenses AS (
     SELECT
