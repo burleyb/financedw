@@ -2,7 +2,7 @@
 -- Finance reconciliation view: compares Delta warehouse fact totals with raw NetSuite GL by account & month
 -- Usage: SELECT * FROM gold.finance.vw_gl_vs_dw_diff WHERE year = 2025 AND month = 1 ORDER BY ABS(difference) DESC;
 
-
+ 
 
 CREATE OR REPLACE VIEW gold.finance.vw_gl_vs_dw_diff AS
 WITH dw AS (
@@ -50,24 +50,7 @@ SELECT
     COALESCE(dw.dw_total, 0)  AS dw_total,
     COALESCE(ns.gl_total, 0)  AS ns_total,
     COALESCE(dw.dw_total, 0) - COALESCE(ns.gl_total, 0) AS difference
-FROM (
-    SELECT account_number, year, month, SUM(amount_dollars) AS dw_total
-    FROM (
-        SELECT da.account_number, dt.year, dt.month, f.amount_dollars
-        FROM silver.finance.fact_deal_netsuite_transactions f
-        JOIN silver.finance.dim_account da ON f.account_key = da.account_key
-        JOIN silver.finance.dim_date dt ON f.revenue_recognition_date_key = dt.date_key
-        WHERE CAST(REGEXP_EXTRACT(da.account_number, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 8999
-
-        UNION ALL
-        -- Reconciliation adjustments
-        SELECT da.account_number, fa.year, fa.month, fa.amount_dollars
-        FROM silver.finance.fact_gl_recon_adjustment fa
-        JOIN silver.finance.dim_account da ON fa.account_key = da.account_key
-        WHERE CAST(REGEXP_EXTRACT(da.account_number, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 8999
-    ) dw_sub
-    GROUP BY account_number, year, month
-) dw
+FROM dw
 FULL OUTER JOIN ns
   ON dw.account_number = ns.account_number
  AND dw.year           = ns.year
