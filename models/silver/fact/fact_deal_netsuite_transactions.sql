@@ -353,7 +353,7 @@ USING (
         AND t.custbody_le_deal_id IS NOT NULL
         AND t.custbody_le_deal_id != 0
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'SALESORD')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
@@ -381,9 +381,8 @@ USING (
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         -- VIN_ONLY: All single VINs (let final transaction logic handle deduplication)
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')  -- Include invoice & journal revenue entries
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'SALESORD')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
@@ -410,14 +409,14 @@ USING (
       WHERE t.custbody_leaseend_vinno IS NOT NULL
           AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
           AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')
+          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'SALESORD')
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND tl.foreignamount != 0
           AND tl.expenseaccount NOT IN (267, 269, 498, 499) -- Exclude 5110, 5120, 5110A, 5120A from multi-VIN too
     ),
     
-    vin_splits AS (
+    vin_splits_raw AS (
       SELECT
           mvr.transaction_id,
           mvr.trandate,
@@ -426,34 +425,67 @@ USING (
           mvr.transaction_type,
           mvr.transaction_category,
           mvr.transaction_subcategory,
-          UPPER(TRIM(vin_element.col)) as individual_vin,
-          SIZE(SPLIT(mvr.vin_list, ',')) as vin_count,
-          vin_element.pos                                   as vin_pos,
-          -- integer cents for accuracy
-          CAST(ROUND(mvr.total_amount * 100) AS BIGINT)                             AS total_cents,
-          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) AS base_split_cents,
-          pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) AS remainder_cents,
-          -- allocate ALL remainder cents to the FIRST VIN only (NetSuite behaviour)
-          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) + 
-          CASE WHEN vin_element.pos = 0 THEN pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) ELSE 0 END AS split_cents
+          TRIM(vin_element.col) as raw_element,
+          -- Determine if element is a deal ID (6 digits) or VIN (17 chars)
+          CASE 
+              WHEN LENGTH(TRIM(vin_element.col)) = 6 AND TRIM(vin_element.col) REGEXP '^[0-9]+$' THEN 'DEAL_ID'
+              WHEN LENGTH(TRIM(vin_element.col)) = 17 THEN 'VIN'
+              ELSE 'OTHER'
+          END as element_type,
+          SIZE(SPLIT(mvr.vin_list, ',')) as element_count,
+          vin_element.pos as element_pos
       FROM multi_vin_raw mvr
       LATERAL VIEW posexplode(SPLIT(mvr.vin_list, ',')) vin_element AS pos, col
-      WHERE LENGTH(TRIM(col)) >= 5
+      WHERE LENGTH(TRIM(vin_element.col)) >= 5
+    ),
+    
+    vin_splits_with_lookup AS (
+      SELECT
+          vsr.*,
+          -- Look up VIN for deal IDs, use as-is for VINs
+          COALESCE(
+              CASE 
+                  WHEN vsr.element_type = 'DEAL_ID' THEN c.vin
+                  WHEN vsr.element_type = 'VIN' THEN UPPER(vsr.raw_element)
+                  ELSE NULL
+              END
+          ) as resolved_vin
+      FROM vin_splits_raw vsr
+      LEFT JOIN bronze.leaseend_db_public.cars c ON 
+          vsr.element_type = 'DEAL_ID'
+          AND TRY_CAST(vsr.raw_element AS INT) = c.deal_id
+          AND TRY_CAST(vsr.raw_element AS INT) IS NOT NULL
+          AND c.vin IS NOT NULL
+          AND LENGTH(c.vin) = 17
+    ),
+    
+    vin_splits_valid AS (
+      SELECT
+          vswl.*,
+          -- integer cents for accuracy
+          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) AS total_cents,
+          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count AS base_split_cents,
+          pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) AS remainder_cents,
+          -- allocate ALL remainder cents to the FIRST VALID VIN only
+          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count + 
+          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents
+      FROM vin_splits_with_lookup vswl
+      WHERE vswl.resolved_vin IS NOT NULL  -- Only include successfully resolved VINs
     )
     
     SELECT
-        vs.individual_vin as vin,
-        vs.account,
-        vs.trandate,
-        YEAR(vs.trandate) as transaction_year,
-        MONTH(vs.trandate) as transaction_month,
-        vs.transaction_type,
-        vs.transaction_category,
-        vs.transaction_subcategory,
-        SUM(vs.split_cents) / 100.0 as total_amount
-    FROM vin_splits vs
-    GROUP BY vs.individual_vin, vs.account, vs.trandate, YEAR(vs.trandate), MONTH(vs.trandate),
-             vs.transaction_type, vs.transaction_category, vs.transaction_subcategory
+        vsv.resolved_vin as vin,
+        vsv.account,
+        vsv.trandate,
+        YEAR(vsv.trandate) as transaction_year,
+        MONTH(vsv.trandate) as transaction_month,
+        vsv.transaction_type,
+        vsv.transaction_category,
+        vsv.transaction_subcategory,
+        SUM(vsv.split_cents) / 100.0 as total_amount
+    FROM vin_splits_valid vsv
+    GROUP BY vsv.resolved_vin, vsv.account, vsv.trandate, YEAR(vsv.trandate), MONTH(vsv.trandate),
+             vsv.transaction_type, vsv.transaction_category, vsv.transaction_subcategory
   ),
   
   -- Multi-VIN transaction splitting for revenue
@@ -479,7 +511,7 @@ USING (
           AND so.amount != 0
     ),
     
-    vin_splits AS (
+    vin_splits_raw AS (
       SELECT
           mvr.transaction_id,
           mvr.trandate,
@@ -488,34 +520,67 @@ USING (
           mvr.transaction_type,
           mvr.transaction_category,
           mvr.transaction_subcategory,
-          UPPER(TRIM(vin_element.col)) as individual_vin,
-          SIZE(SPLIT(mvr.vin_list, ',')) as vin_count,
-          vin_element.pos                                   as vin_pos,
-          -- integer cents for accuracy
-          CAST(ROUND(mvr.total_amount * 100) AS BIGINT)                             AS total_cents,
-          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) AS base_split_cents,
-          pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) AS remainder_cents,
-          -- allocate ALL remainder cents to the FIRST VIN only (NetSuite behaviour)
-          CAST(ROUND(mvr.total_amount * 100) AS BIGINT) DIV SIZE(SPLIT(mvr.vin_list, ',')) + 
-          CASE WHEN vin_element.pos = 0 THEN pmod(CAST(ROUND(mvr.total_amount * 100) AS BIGINT), SIZE(SPLIT(mvr.vin_list, ','))) ELSE 0 END AS split_cents
+          TRIM(vin_element.col) as raw_element,
+          -- Determine if element is a deal ID (6 digits) or VIN (17 chars)
+          CASE 
+              WHEN LENGTH(TRIM(vin_element.col)) = 6 AND TRIM(vin_element.col) REGEXP '^[0-9]+$' THEN 'DEAL_ID'
+              WHEN LENGTH(TRIM(vin_element.col)) = 17 THEN 'VIN'
+              ELSE 'OTHER'
+          END as element_type,
+          SIZE(SPLIT(mvr.vin_list, ',')) as element_count,
+          vin_element.pos as element_pos
       FROM multi_vin_raw mvr
       LATERAL VIEW posexplode(SPLIT(mvr.vin_list, ',')) vin_element AS pos, col
-      WHERE LENGTH(TRIM(col)) >= 5
+      WHERE LENGTH(TRIM(vin_element.col)) >= 5
+    ),
+    
+    vin_splits_with_lookup AS (
+      SELECT
+          vsr.*,
+          -- Look up VIN for deal IDs, use as-is for VINs
+          COALESCE(
+              CASE 
+                  WHEN vsr.element_type = 'DEAL_ID' THEN c.vin
+                  WHEN vsr.element_type = 'VIN' THEN UPPER(vsr.raw_element)
+                  ELSE NULL
+              END
+          ) as resolved_vin
+      FROM vin_splits_raw vsr
+      LEFT JOIN bronze.leaseend_db_public.cars c ON 
+          vsr.element_type = 'DEAL_ID'
+          AND TRY_CAST(vsr.raw_element AS INT) = c.deal_id
+          AND TRY_CAST(vsr.raw_element AS INT) IS NOT NULL
+          AND c.vin IS NOT NULL
+          AND LENGTH(c.vin) = 17
+    ),
+    
+    vin_splits_valid AS (
+      SELECT
+          vswl.*,
+          -- integer cents for accuracy
+          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) AS total_cents,
+          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count AS base_split_cents,
+          pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) AS remainder_cents,
+          -- allocate ALL remainder cents to the FIRST VALID VIN only
+          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count + 
+          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents
+      FROM vin_splits_with_lookup vswl
+      WHERE vswl.resolved_vin IS NOT NULL  -- Only include successfully resolved VINs
     )
     
     SELECT
-        vs.individual_vin as vin,
-        vs.account,
-        vs.trandate,
-        YEAR(vs.trandate) as transaction_year,
-        MONTH(vs.trandate) as transaction_month,
-        vs.transaction_type,
-        vs.transaction_category,
-        vs.transaction_subcategory,
-        SUM(vs.split_cents) / 100.0 as total_amount
-    FROM vin_splits vs
-    GROUP BY vs.individual_vin, vs.account, vs.trandate, YEAR(vs.trandate), MONTH(vs.trandate),
-             vs.transaction_type, vs.transaction_category, vs.transaction_subcategory
+        vsv.resolved_vin as vin,
+        vsv.account,
+        vsv.trandate,
+        YEAR(vsv.trandate) as transaction_year,
+        MONTH(vsv.trandate) as transaction_month,
+        vsv.transaction_type,
+        vsv.transaction_category,
+        vsv.transaction_subcategory,
+        SUM(vsv.split_cents) / 100.0 as total_amount
+    FROM vin_splits_valid vsv
+    GROUP BY vsv.resolved_vin, vsv.account, vsv.trandate, YEAR(vsv.trandate), MONTH(vsv.trandate),
+             vsv.transaction_type, vsv.transaction_category, vsv.transaction_subcategory
   ),
   
   -- VIN-only revenue - USE SALESINVOICED for revenue accounts
@@ -643,7 +708,7 @@ USING (
     WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
         AND t.custbody_le_deal_id IS NOT NULL
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'SALESORD')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
@@ -682,6 +747,7 @@ USING (
         AND t.custbody_leaseend_vinno IS NULL -- This was the missing condition
         AND t.trandate IS NOT NULL
         AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'SALESORD')
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
