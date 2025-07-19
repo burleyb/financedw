@@ -1093,6 +1093,17 @@ USING (
       CAST(NULL AS INT) AS credit_memo_time_key
     FROM unallocated_expenses_consolidated uec
     INNER JOIN account_mappings am ON uec.account = am.account_id
+  ),
+  
+  driver_ranker AS (
+      SELECT
+          transaction_key,
+          ROW_NUMBER() OVER (
+              PARTITION BY deal_key, vin 
+              ORDER BY netsuite_posting_date_key, netsuite_posting_time_key, transaction_key
+          ) as rn
+      FROM final_transactions_base
+      WHERE transaction_category = 'TITLING_FEES'
   )
   
   -- Add driver count calculation and final columns
@@ -1119,13 +1130,14 @@ USING (
     ftb.allocation_factor,
     -- Titling fee driver count logic
     CASE 
-      WHEN ftb.transaction_category = 'TITLING_FEES' 
+      WHEN dr.rn = 1 
       THEN TRUE
       ELSE FALSE
     END AS is_driver_count,
     ftb._source_table,
     current_timestamp() AS _load_timestamp
   FROM final_transactions_base ftb
+  LEFT JOIN driver_ranker dr ON ftb.transaction_key = dr.transaction_key
 
 ) AS source
 ON target.transaction_key = source.transaction_key
