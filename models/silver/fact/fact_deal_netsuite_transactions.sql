@@ -353,11 +353,10 @@ USING (
         AND t.custbody_le_deal_id IS NOT NULL
         AND t.custbody_le_deal_id != 0
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
-        AND tl.expenseaccount NOT IN (267, 269, 498, 499) -- Exclude 5110, 5120, 5110A, 5120A from VIN-matching
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount
   ),
   
@@ -384,7 +383,7 @@ USING (
         -- VIN_ONLY: All single VINs (let final transaction logic handle deduplication)
         AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')  -- Include invoice & journal revenue entries
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
@@ -411,7 +410,7 @@ USING (
       WHERE t.custbody_leaseend_vinno IS NOT NULL
           AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
           AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-          AND t.abbrevtype NOT IN ('PURCHORD', 'SALESORD', 'RTN AUTH', 'VENDAUTH')
+          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND tl.foreignamount != 0
@@ -475,6 +474,7 @@ USING (
       WHERE t.custbody_leaseend_vinno IS NOT NULL
           AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
           AND am.transaction_type = 'REVENUE'
+          AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND so.amount != 0
     ),

@@ -29,8 +29,8 @@ ns AS (
         SUM(
        CASE
          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999
-              THEN tal.amount * -1      -- flip sign for revenue accounts
-         ELSE tal.amount
+              THEN tal.amount * -1      -- flip sign for revenue accounts to be positive
+         ELSE tal.amount * -1           -- flip sign for expense accounts to be negative
        END
    ) AS gl_total
     FROM bronze.ns.transactionaccountingline tal
