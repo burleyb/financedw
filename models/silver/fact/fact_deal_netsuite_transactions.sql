@@ -1095,49 +1095,59 @@ USING (
     INNER JOIN account_mappings am ON uec.account = am.account_id
   ),
   
-  driver_ranker AS (
-      SELECT
-          transaction_key,
-          ROW_NUMBER() OVER (
-              PARTITION BY deal_key, vin 
-              ORDER BY netsuite_posting_date_key, netsuite_posting_time_key, transaction_key
-          ) as rn
-      FROM final_transactions_base
-      WHERE transaction_category = 'TITLING_FEES'
+  final_transactions_with_account_info AS (
+    SELECT
+        ftb.*,
+        a.acctnumber,
+        ROW_NUMBER() OVER (ORDER BY ftb.transaction_key) AS global_rownum,
+        CONCAT(ftb.transaction_key, '_', ROW_NUMBER() OVER (ORDER BY ftb.transaction_key)) AS transaction_key_unique
+    FROM final_transactions_base ftb
+    LEFT JOIN bronze.ns.account a ON ftb.account_key = CAST(a.id AS STRING)
+  ),
+  
+  driver_rownum_4141 AS (
+    SELECT
+      transaction_key_unique,
+      ROW_NUMBER() OVER (
+        PARTITION BY deal_key, vin
+        ORDER BY global_rownum
+      ) AS driver_rownum
+    FROM final_transactions_with_account_info
+    WHERE acctnumber = '4141' AND transaction_type = 'REVENUE'
   )
   
   -- Add driver count calculation and final columns
   SELECT
-    ftb.transaction_key,
-    ftb.deal_key,
-    ftb.account_key,
-    ftb.netsuite_posting_date_key,
-    ftb.netsuite_posting_time_key,
-    ftb.revenue_recognition_date_key,
-    ftb.revenue_recognition_time_key,
-    ftb.has_credit_memo,
-    ftb.credit_memo_date_key,
-    ftb.credit_memo_time_key,
-    ftb.vin,
-    ftb.month,
-    ftb.year,
-    ftb.transaction_type,
-    ftb.transaction_category,
-    ftb.transaction_subcategory,
-    ftb.amount_cents,
-    ftb.amount_dollars,
-    ftb.allocation_method,
-    ftb.allocation_factor,
+    ftwai.transaction_key,
+    ftwai.deal_key,
+    ftwai.account_key,
+    ftwai.netsuite_posting_date_key,
+    ftwai.netsuite_posting_time_key,
+    ftwai.revenue_recognition_date_key,
+    ftwai.revenue_recognition_time_key,
+    ftwai.has_credit_memo,
+    ftwai.credit_memo_date_key,
+    ftwai.credit_memo_time_key,
+    ftwai.vin,
+    ftwai.month,
+    ftwai.year,
+    ftwai.transaction_type,
+    ftwai.transaction_category,
+    ftwai.transaction_subcategory,
+    ftwai.amount_cents,
+    ftwai.amount_dollars,
+    ftwai.allocation_method,
+    ftwai.allocation_factor,
     -- Titling fee driver count logic
     CASE 
-      WHEN dr.rn = 1 
-      THEN TRUE
+      WHEN dr.driver_rownum = 1 THEN TRUE
       ELSE FALSE
     END AS is_driver_count,
-    ftb._source_table,
+    ftwai._source_table,
     current_timestamp() AS _load_timestamp
-  FROM final_transactions_base ftb
-  LEFT JOIN driver_ranker dr ON ftb.transaction_key = dr.transaction_key
+  FROM final_transactions_with_account_info ftwai
+  LEFT JOIN driver_rownum_4141 dr
+      ON ftwai.transaction_key_unique = dr.transaction_key_unique
 
 ) AS source
 ON target.transaction_key = source.transaction_key
