@@ -821,10 +821,6 @@ USING (
     INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
     WHERE am.transaction_subcategory = 'CHARGEBACK'  -- Only chargeback accounts (4107, 4111, 4121)
-        AND (
-            tl.expenseaccount != 524  -- Account 4107 RESERVE CHARGEBACK has special treatment
-            OR (tl.expenseaccount = 524 AND t.abbrevtype = 'GENJRNL')  -- 4107 only includes GENJRNL
-        )
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
 
