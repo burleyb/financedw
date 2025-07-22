@@ -374,6 +374,7 @@ USING (
     WITH multi_vin_raw AS (
       SELECT
           t.id as transaction_id,
+          tl.id as transaction_line_id,  -- Add line ID to ensure each line is processed separately
           t.trandate,
           t.custbody_leaseend_vinno as vin_list,
           tl.expenseaccount as account,
@@ -397,6 +398,7 @@ USING (
     vin_splits_raw AS (
       SELECT
           mvr.transaction_id,
+          mvr.transaction_line_id,  -- Propagate line ID  
           mvr.trandate,
           mvr.account,
           mvr.total_amount,
@@ -423,7 +425,7 @@ USING (
           -- Look up VIN for deal IDs, use as-is for VINs
           COALESCE(
               CASE 
-                  WHEN vsr.element_type = 'DEAL_ID' THEN c.vin
+                  WHEN vsr.element_type = 'DEAL_ID' THEN UPPER(c.vin)
                   WHEN vsr.element_type = 'VIN' THEN UPPER(vsr.raw_element)
                   ELSE NULL
               END
@@ -435,6 +437,7 @@ USING (
           AND TRY_CAST(vsr.raw_element AS INT) IS NOT NULL
           AND c.vin IS NOT NULL
           AND LENGTH(c.vin) = 17
+          AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
     ),
     
     vin_splits_valid AS (
@@ -446,7 +449,9 @@ USING (
           pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) AS remainder_cents,
           -- allocate ALL remainder cents to the FIRST VALID VIN only
           CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count + 
-          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents
+          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents,
+          -- Add deduplication info: mark if this is the first occurrence of a duplicate VIN per transaction LINE
+          ROW_NUMBER() OVER (PARTITION BY vswl.transaction_id, vswl.transaction_line_id, vswl.resolved_vin ORDER BY vswl.element_pos) as vin_occurrence_rank
       FROM vin_splits_with_lookup vswl
       WHERE vswl.resolved_vin IS NOT NULL  -- Only include successfully resolved VINs
     )
@@ -460,7 +465,8 @@ USING (
         vsv.transaction_type,
         vsv.transaction_category,
         vsv.transaction_subcategory,
-        SUM(vsv.split_cents) / 100.0 as total_amount
+        -- Only include the first occurrence of each VIN to prevent double-counting duplicates per transaction line
+        SUM(CASE WHEN vsv.vin_occurrence_rank = 1 THEN vsv.split_cents ELSE 0 END) / 100.0 as total_amount
     FROM vin_splits_valid vsv
     GROUP BY vsv.resolved_vin, vsv.account, vsv.trandate, YEAR(vsv.trandate), MONTH(vsv.trandate),
              vsv.transaction_type, vsv.transaction_category, vsv.transaction_subcategory
@@ -471,6 +477,7 @@ USING (
     WITH multi_vin_raw AS (
       SELECT
           t.id as transaction_id,
+          so.uniquekey as sales_line_id,  -- Use uniquekey as the line ID for salesinvoiced
           t.trandate,
           t.custbody_leaseend_vinno as vin_list,
           so.account,
@@ -493,6 +500,7 @@ USING (
     vin_splits_raw AS (
       SELECT
           mvr.transaction_id,
+          mvr.sales_line_id,  -- Propagate sales line ID
           mvr.trandate,
           mvr.account,
           mvr.total_amount,
@@ -519,7 +527,7 @@ USING (
           -- Look up VIN for deal IDs, use as-is for VINs
           COALESCE(
               CASE 
-                  WHEN vsr.element_type = 'DEAL_ID' THEN c.vin
+                  WHEN vsr.element_type = 'DEAL_ID' THEN UPPER(c.vin)
                   WHEN vsr.element_type = 'VIN' THEN UPPER(vsr.raw_element)
                   ELSE NULL
               END
@@ -531,6 +539,7 @@ USING (
           AND TRY_CAST(vsr.raw_element AS INT) IS NOT NULL
           AND c.vin IS NOT NULL
           AND LENGTH(c.vin) = 17
+          AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
     ),
     
     vin_splits_valid AS (
@@ -542,7 +551,9 @@ USING (
           pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) AS remainder_cents,
           -- allocate ALL remainder cents to the FIRST VALID VIN only
           CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count + 
-          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents
+          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents,
+          -- Add deduplication info: mark if this is the first occurrence of a duplicate VIN per sales line
+          ROW_NUMBER() OVER (PARTITION BY vswl.transaction_id, vswl.sales_line_id, vswl.resolved_vin ORDER BY vswl.element_pos) as vin_occurrence_rank
       FROM vin_splits_with_lookup vswl
       WHERE vswl.resolved_vin IS NOT NULL  -- Only include successfully resolved VINs
     )
@@ -556,7 +567,8 @@ USING (
         vsv.transaction_type,
         vsv.transaction_category,
         vsv.transaction_subcategory,
-        SUM(vsv.split_cents) / 100.0 as total_amount
+        -- Only include the first occurrence of each VIN to prevent double-counting duplicates per sales line
+        SUM(CASE WHEN vsv.vin_occurrence_rank = 1 THEN vsv.split_cents ELSE 0 END) / 100.0 as total_amount
     FROM vin_splits_valid vsv
     GROUP BY vsv.resolved_vin, vsv.account, vsv.trandate, YEAR(vsv.trandate), MONTH(vsv.trandate),
              vsv.transaction_type, vsv.transaction_category, vsv.transaction_subcategory
@@ -717,42 +729,118 @@ USING (
         AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)  -- Exclude accounts handled by EXPENSE_DIRECT
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
     
+    
     UNION ALL
     
-            -- TARGETED FIX: Include multi-VIN transactions for SPECIFIC accounts (like 7141 BANK FEES)
-        -- where NO elements can be resolved to actual VINs - capture full amount instead of split orphans
-        -- IMPORTANT: Exclude chargeback accounts which have their own processing logic
-        -- BUSINESS RULE: Exclude multi-VIN transactions with NULL approval status (not included in Income Statement)
+            -- PARTIAL MULTI-VIN ALLOCATION: Include unresolvable portions of multi-VIN transactions
+        -- For transactions where some elements can be resolved (handled by multi-VIN split) 
+        -- and some cannot be resolved (should be allocated)
         SELECT
-            DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
-            tl.expenseaccount as account,
-            SUM(tl.foreignamount) AS total_amount
-        FROM bronze.ns.transactionline AS tl
-        INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
-        INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
-        WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions
-            AND t.trandate IS NOT NULL
-            AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
-            AND am.transaction_subcategory != 'CHARGEBACK'  -- EXCLUDE chargeback accounts to prevent conflicts
-            AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
-            AND t.approvalstatus = 2  -- ONLY approved multi-VIN (NULL approval multi-VIN excluded from Income Statement)
-            AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-            AND tl.foreignamount != 0
-            AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)
-            AND tl.expenseaccount = 450  -- ONLY account 7141 BANK FEES for now - can expand if needed
-            -- Check if ANY element from the VIN list can be resolved to an actual VIN
-            AND NOT EXISTS (
-                SELECT 1
-                FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) e
-                INNER JOIN bronze.leaseend_db_public.cars c
-                    ON LENGTH(TRIM(e.element)) = 6  -- Only 6-digit deal IDs
-                    AND TRIM(e.element) REGEXP '^[0-9]+$'
-                    AND CAST(TRIM(e.element) AS INT) = c.deal_id
-                    AND c.vin IS NOT NULL
-                    AND LENGTH(c.vin) = 17
-                    AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
-            )
-        GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
+            transaction_period,
+            account,
+            SUM(unresolvable_amount) AS total_amount
+        FROM (
+            SELECT
+                DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
+                tl.expenseaccount as account,
+                t.id as transaction_id,
+                tl.foreignamount as total_amount,
+                SIZE(SPLIT(t.custbody_leaseend_vinno, ',')) as total_elements,
+                -- Count resolvable deal IDs
+                (
+                    SELECT COUNT(DISTINCT TRIM(element_split.element))
+                    FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
+                    INNER JOIN bronze.leaseend_db_public.cars c
+                        ON LENGTH(TRIM(element_split.element)) = 6
+                        AND TRIM(element_split.element) REGEXP '^[0-9]+$'
+                        AND TRY_CAST(TRIM(element_split.element) AS INT) = c.deal_id
+                        AND TRY_CAST(TRIM(element_split.element) AS INT) IS NOT NULL
+                        AND c.vin IS NOT NULL
+                        AND LENGTH(c.vin) = 17
+                        AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+                ) +
+                -- Count resolvable VINs  
+                (
+                    SELECT COUNT(DISTINCT TRIM(element_split.element))
+                    FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
+                    WHERE LENGTH(TRIM(element_split.element)) = 17
+                    AND EXISTS (
+                        SELECT 1 FROM (
+                            SELECT DISTINCT UPPER(c.vin) as vin
+                            FROM bronze.leaseend_db_public.cars c
+                            WHERE c.vin IS NOT NULL 
+                                AND LENGTH(c.vin) = 17
+                                AND c.deal_id IS NOT NULL
+                                AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+                            UNION
+                            SELECT UPPER(bd.vin) AS vin
+                            FROM silver.finance.bridge_vin_deal bd
+                            WHERE bd.is_active = TRUE
+                                AND bd.vin IS NOT NULL
+                                AND LENGTH(bd.vin) = 17
+                                AND bd.deal_id IS NOT NULL
+                        ) dv WHERE dv.vin = UPPER(TRIM(element_split.element))
+                    )
+                ) as resolvable_elements,
+                -- Calculate unresolvable amount
+                tl.foreignamount * (
+                    SIZE(SPLIT(t.custbody_leaseend_vinno, ',')) - 
+                    (
+                        -- Resolvable deal IDs count
+                        (
+                            SELECT COUNT(DISTINCT TRIM(element_split.element))
+                            FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
+                            INNER JOIN bronze.leaseend_db_public.cars c
+                                ON LENGTH(TRIM(element_split.element)) = 6
+                                AND TRIM(element_split.element) REGEXP '^[0-9]+$'
+                                AND TRY_CAST(TRIM(element_split.element) AS INT) = c.deal_id
+                                AND TRY_CAST(TRIM(element_split.element) AS INT) IS NOT NULL
+                                AND c.vin IS NOT NULL
+                                AND LENGTH(c.vin) = 17
+                                AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+                        ) +
+                        -- Resolvable VINs count
+                        (
+                            SELECT COUNT(DISTINCT TRIM(element_split.element))
+                            FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
+                            WHERE LENGTH(TRIM(element_split.element)) = 17
+                            AND EXISTS (
+                                SELECT 1 FROM (
+                                    SELECT DISTINCT UPPER(c.vin) as vin
+                                    FROM bronze.leaseend_db_public.cars c
+                                    WHERE c.vin IS NOT NULL 
+                                        AND LENGTH(c.vin) = 17
+                                        AND c.deal_id IS NOT NULL
+                                        AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+                                    UNION
+                                    SELECT UPPER(bd.vin) AS vin
+                                    FROM silver.finance.bridge_vin_deal bd
+                                    WHERE bd.is_active = TRUE
+                                        AND bd.vin IS NOT NULL
+                                        AND LENGTH(bd.vin) = 17
+                                        AND bd.deal_id IS NOT NULL
+                                ) dv WHERE dv.vin = UPPER(TRIM(element_split.element))
+                            )
+                        )
+                    )
+                ) / SIZE(SPLIT(t.custbody_leaseend_vinno, ',')) as unresolvable_amount
+            FROM bronze.ns.transactionline AS tl
+            INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
+            INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
+            WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions only
+                AND t.trandate IS NOT NULL
+                AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
+                AND am.transaction_subcategory != 'CHARGEBACK'
+                AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
+                AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
+                AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+                AND tl.foreignamount != 0
+                AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)
+                AND tl.expenseaccount = 450  -- ONLY account 7141 BANK FEES for now
+        ) partial_allocations
+        WHERE resolvable_elements > 0  -- Has some resolvable elements
+            AND total_elements > resolvable_elements  -- Has some unresolvable elements
+        GROUP BY transaction_period, account
   ),
   
   -- Combine VIN-matching and allocated amounts
