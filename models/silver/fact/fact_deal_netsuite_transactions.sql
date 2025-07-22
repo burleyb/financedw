@@ -386,7 +386,7 @@ USING (
       WHERE t.custbody_leaseend_vinno IS NOT NULL
           AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
           AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED')  -- Include CC and CC CRED for complete expense capture
+          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND tl.foreignamount != 0
