@@ -714,6 +714,37 @@ USING (
         AND tl.foreignamount != 0
         AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)  -- Exclude accounts handled by EXPENSE_DIRECT
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
+    
+    UNION ALL
+    
+    -- Include multi-VIN transactions where NO elements can be resolved to actual VINs
+    -- These should be captured at full amount as unallocated, not split into orphan pieces
+    SELECT
+        DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
+        tl.expenseaccount as account,
+        SUM(tl.foreignamount) AS total_amount
+    FROM bronze.ns.transactionline AS tl
+    INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
+    INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions
+        AND t.trandate IS NOT NULL
+        AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND tl.foreignamount != 0
+        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)
+        -- Check if ANY element from the VIN list can be resolved to an actual VIN
+        AND NOT EXISTS (
+            SELECT 1 
+            FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) e
+            INNER JOIN bronze.leaseend_db_public.cars c 
+                ON TRIM(e.element) REGEXP '^[0-9]+$' 
+                AND CAST(TRIM(e.element) AS INT) = c.deal_id
+                AND c.vin IS NOT NULL 
+                AND LENGTH(c.vin) = 17
+                AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+        )
+    GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
   ),
   
   -- Combine VIN-matching and allocated amounts
