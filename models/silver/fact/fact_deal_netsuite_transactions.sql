@@ -750,7 +750,7 @@ USING (
       AND t.custbody_leaseend_vinno NOT LIKE '%,%'
       AND t.custbody_le_deal_id IS NOT NULL
       AND t.custbody_le_deal_id != 0
-      AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')  -- Include invoice & journal revenue entries
+      AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
       AND am.transaction_type = 'REVENUE'
       AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
