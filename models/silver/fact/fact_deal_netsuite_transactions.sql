@@ -758,42 +758,10 @@ USING (
 
         UNION ALL
 
-    -- Chargeback revenue transactions (using actual transaction dates, no deal ID required)
+    -- Chargeback revenue transactions (from transactionline to match Income Statement source)
+    -- NetSuite Income Statement uses transactionline data for chargeback accounts, not salesinvoiced
     SELECT
-      CONCAT('CHARGEBACK_', so.account, '_', t.id, '_REVENUE') as transaction_key,
-      NULL as deal_key,  -- Chargebacks typically don't have deal IDs
-      CAST(so.account AS STRING) as account_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
-      UPPER(t.custbody_leaseend_vinno) as vin,
-      MONTH(t.trandate) as month,
-      YEAR(t.trandate) as year,
-      am.transaction_type,
-      am.transaction_category,
-      am.transaction_subcategory,
-      CAST(ROUND(so.amount * 100) AS BIGINT) as amount_cents,
-      CAST(so.amount AS DECIMAL(15,2)) as amount_dollars,
-      'CHARGEBACK' as allocation_method,
-      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      'bronze.ns.salesinvoiced' as _source_table,
-      FALSE AS has_credit_memo,
-      CAST(NULL AS INT) AS credit_memo_date_key,
-      CAST(NULL AS INT) AS credit_memo_time_key
-    FROM bronze.ns.salesinvoiced so
-    INNER JOIN bronze.ns.transaction t ON so.transaction = t.id
-    INNER JOIN account_mappings am ON so.account = am.account_id
-    WHERE am.transaction_subcategory = 'CHARGEBACK'  -- Only chargeback accounts
-        AND t.abbrevtype IN ('GENJRNL', 'BILLCRED', 'BILL', 'CREDMEM', 'CHK')  -- Include CHK for complete chargeback capture
-        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-        AND so.amount != 0
-
-    UNION ALL
-
-    -- CHK chargeback transactions (from transactionline since they don't appear in salesinvoiced)
-    SELECT
-      CONCAT('CHARGEBACK_CHK_', tl.expenseaccount, '_', t.id, '_REVENUE') as transaction_key,
+      CONCAT('CHARGEBACK_', tl.expenseaccount, '_', t.id, '_REVENUE') as transaction_key,
       NULL as deal_key,  -- Chargebacks typically don't have deal IDs
       CAST(tl.expenseaccount AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
@@ -808,7 +776,7 @@ USING (
       am.transaction_subcategory,
       CAST(ROUND(tl.foreignamount * -1 * 100) AS BIGINT) as amount_cents,
       CAST(tl.foreignamount * -1 AS DECIMAL(15,2)) as amount_dollars,
-      'CHARGEBACK_CHK' as allocation_method,
+      'CHARGEBACK' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
       FALSE AS has_credit_memo,
@@ -817,8 +785,7 @@ USING (
     FROM bronze.ns.transactionline tl
     INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
-    WHERE am.transaction_subcategory = 'CHARGEBACK'  -- Only chargeback accounts
-        AND t.abbrevtype = 'CHK'  -- Only CHK transactions missing from salesinvoiced
+    WHERE am.transaction_subcategory = 'CHARGEBACK'  -- Only chargeback accounts (4107, 4111, 4121)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
 
