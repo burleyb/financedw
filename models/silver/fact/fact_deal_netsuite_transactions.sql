@@ -330,6 +330,7 @@ USING (
         AND t.custbody_le_deal_id != 0
         AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
+        AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account
