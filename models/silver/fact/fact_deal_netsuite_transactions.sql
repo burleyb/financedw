@@ -736,7 +736,7 @@ USING (
             AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
             AND (
                 t.approvalstatus = 2  -- ONLY approved multi-VIN (NULL approval multi-VIN excluded from Income Statement)
-                OR (DATE_FORMAT(t.trandate, 'yyyy-MM') = '2025-04' AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL))  -- April exception - includes NULL approval
+                OR (DATE_FORMAT(t.trandate, 'yyyy-MM') IN ('2025-03', '2025-04') AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL))  -- March & April exception - includes NULL approval
             )
             AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
             AND tl.foreignamount != 0
