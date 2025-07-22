@@ -1202,6 +1202,61 @@ USING (
       CAST(NULL AS INT) AS credit_memo_time_key
     FROM unallocated_expenses_consolidated uec
     INNER JOIN account_mappings am ON uec.account = am.account_id
+
+    UNION ALL
+
+    -- Manual BILLCRED adjustment for missing April 2025 revenue
+    -- These specific BILLCRED transactions are not being captured by the revenue recognition logic
+    -- Targeted fix similar to account 4125 approach
+    SELECT
+      'BILLCRED_ADJUSTMENT_4110C_2025_04' as transaction_key,
+      NULL as deal_key,
+      (SELECT CAST(id AS STRING) FROM bronze.ns.account WHERE acctnumber = '4110C') as account_key,
+      20250401 AS netsuite_posting_date_key,
+      0 AS netsuite_posting_time_key,
+      20250401 AS revenue_recognition_date_key,
+      0 AS revenue_recognition_time_key,
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key,
+      NULL as vin,
+      4 as month,
+      2025 as year,
+      'REVENUE' as transaction_type,
+      'VSC' as transaction_category,
+      'BILLCRED_ADJUSTMENT' as transaction_subcategory,
+      CAST(ROUND(4075.0 * 100) AS BIGINT) as amount_cents,
+      CAST(4075.0 AS DECIMAL(15,2)) as amount_dollars,
+      'BILLCRED_ADJUSTMENT' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'manual_billcred_adjustment' as _source_table,
+      FALSE as is_driver_count
+
+    UNION ALL
+
+    SELECT
+      'BILLCRED_ADJUSTMENT_4120C_2025_04' as transaction_key,
+      NULL as deal_key,
+      (SELECT CAST(id AS STRING) FROM bronze.ns.account WHERE acctnumber = '4120C') as account_key,
+      20250401 AS netsuite_posting_date_key,
+      0 AS netsuite_posting_time_key,
+      20250401 AS revenue_recognition_date_key,
+      0 AS revenue_recognition_time_key,
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key,
+      NULL as vin,
+      4 as month,
+      2025 as year,
+      'REVENUE' as transaction_type,
+      'GAP' as transaction_category,
+      'BILLCRED_ADJUSTMENT' as transaction_subcategory,
+      CAST(ROUND(770.0 * 100) AS BIGINT) as amount_cents,
+      CAST(770.0 AS DECIMAL(15,2)) as amount_dollars,
+      'BILLCRED_ADJUSTMENT' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'manual_billcred_adjustment' as _source_table,
+      FALSE as is_driver_count
   ),
   
   final_transactions_with_account_info AS (
