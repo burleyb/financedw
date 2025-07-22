@@ -328,13 +328,12 @@ USING (
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND t.custbody_le_deal_id IS NOT NULL
         AND t.custbody_le_deal_id != 0
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')  -- Include invoice & journal revenue entries
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account
   ),
-  
 
   
   -- VIN-only expenses - USE TRANSACTIONLINE for expense accounts 
@@ -359,7 +358,7 @@ USING (
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         -- VIN_ONLY: All single-VIN expense transactions (regardless of deal_id presence)
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')  -- Exclude SALESORD for expense reconciliation match
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC')  -- Include CC transactions for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
@@ -386,7 +385,7 @@ USING (
       WHERE t.custbody_leaseend_vinno IS NOT NULL
           AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
           AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')  -- Exclude SALESORD for expense reconciliation match
+          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC')  -- Include CC transactions for complete expense capture
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND tl.foreignamount != 0
@@ -484,7 +483,7 @@ USING (
           AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
           AND am.transaction_type = 'REVENUE'
           AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
-          AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')
+          AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND so.amount != 0
     ),
@@ -578,8 +577,8 @@ USING (
     WHERE LENGTH(t.custbody_leaseend_vinno) = 17
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
-        -- VIN_ONLY: All single VINs (let final transaction logic handle deduplication)
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')  -- Include invoice & journal revenue entries
+        AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- VIN_ONLY: Only transactions without deal_ids
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND t.trandate IS NOT NULL
@@ -688,7 +687,7 @@ USING (
     WHERE (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
         AND t.custbody_leaseend_vinno IS NULL  -- ONLY transactions with NO VIN should be unallocated
         AND t.trandate IS NOT NULL
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL')  -- Include invoice & journal revenue entries
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -709,7 +708,7 @@ USING (
         AND t.custbody_leaseend_vinno IS NULL -- This was the missing condition
         AND t.trandate IS NOT NULL
         AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')  -- Exclude SALESORD for expense reconciliation match
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC')  -- Include CC transactions for complete expense capture
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
         AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)  -- Exclude accounts handled by EXPENSE_DIRECT
@@ -861,6 +860,7 @@ USING (
     UNION ALL
 
     -- VIN-only revenue transactions (VIN exists but NOT already captured by VIN_MATCH)
+    -- Fix: Only exclude the amount already captured, not the entire VIN+account combination
     SELECT
       CONCAT(canonical_dv.deal_id, '_', vor.account, '_', vor.transaction_period, '_VIN_ONLY_REVENUE') as transaction_key,
       CAST(canonical_dv.deal_id AS STRING) as deal_key,
@@ -888,8 +888,7 @@ USING (
         SELECT vin, MAX(deal_id) as deal_id FROM deal_vins GROUP BY vin
     ) canonical_dv ON vor.vin = canonical_dv.vin
     INNER JOIN account_mappings am ON vor.account = am.account_id
-    LEFT JOIN vin_matching_revenue vmr ON vor.vin = vmr.vin AND vor.account = vmr.account
-    WHERE vmr.vin IS NULL
+    -- No deduplication needed: vin_only_revenue already filters for transactions without deal_ids
 
     UNION ALL
 
@@ -1141,7 +1140,7 @@ USING (
     WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
         AND t.custbody_le_deal_id IS NOT NULL
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED')  -- Exclude SALESORD for expense reconciliation match
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC')  -- Include CC transactions for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
