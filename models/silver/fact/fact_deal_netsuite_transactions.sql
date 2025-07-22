@@ -1216,9 +1216,6 @@ USING (
       0 AS netsuite_posting_time_key,
       20250401 AS revenue_recognition_date_key,
       0 AS revenue_recognition_time_key,
-      FALSE AS has_credit_memo,
-      CAST(NULL AS INT) AS credit_memo_date_key,
-      CAST(NULL AS INT) AS credit_memo_time_key,
       NULL as vin,
       4 as month,
       2025 as year,
@@ -1230,7 +1227,9 @@ USING (
       'BILLCRED_ADJUSTMENT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'manual_billcred_adjustment' as _source_table,
-      FALSE as is_driver_count
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key
 
     UNION ALL
 
@@ -1242,9 +1241,6 @@ USING (
       0 AS netsuite_posting_time_key,
       20250401 AS revenue_recognition_date_key,
       0 AS revenue_recognition_time_key,
-      FALSE AS has_credit_memo,
-      CAST(NULL AS INT) AS credit_memo_date_key,
-      CAST(NULL AS INT) AS credit_memo_time_key,
       NULL as vin,
       4 as month,
       2025 as year,
@@ -1256,7 +1252,9 @@ USING (
       'BILLCRED_ADJUSTMENT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'manual_billcred_adjustment' as _source_table,
-      FALSE as is_driver_count
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key
   ),
   
   final_transactions_with_account_info AS (
