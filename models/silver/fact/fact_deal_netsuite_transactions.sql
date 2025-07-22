@@ -714,6 +714,40 @@ USING (
         AND tl.foreignamount != 0
         AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)  -- Exclude accounts handled by EXPENSE_DIRECT
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
+    
+    UNION ALL
+    
+    -- TARGETED FIX: Include multi-VIN transactions for SPECIFIC accounts (like 7141 BANK FEES)
+    -- where NO elements can be resolved to actual VINs - capture full amount instead of split orphans
+    -- IMPORTANT: Exclude chargeback accounts which have their own processing logic
+    SELECT
+        DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
+        tl.expenseaccount as account,
+        SUM(tl.foreignamount) AS total_amount
+    FROM bronze.ns.transactionline AS tl
+    INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
+    INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions
+        AND t.trandate IS NOT NULL
+        AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
+        AND am.transaction_subcategory != 'CHARGEBACK'  -- EXCLUDE chargeback accounts to prevent conflicts
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND tl.foreignamount != 0
+        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)
+        AND tl.expenseaccount = 450  -- ONLY account 7141 BANK FEES for now - can expand if needed
+        -- Check if ANY element from the VIN list can be resolved to an actual VIN
+        AND NOT EXISTS (
+            SELECT 1 
+            FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) e
+            INNER JOIN bronze.leaseend_db_public.cars c 
+                ON TRIM(e.element) REGEXP '^[0-9]+$' 
+                AND CAST(TRIM(e.element) AS INT) = c.deal_id
+                AND c.vin IS NOT NULL 
+                AND LENGTH(c.vin) = 17
+                AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+        )
+    GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
   ),
   
   -- Combine VIN-matching and allocated amounts
