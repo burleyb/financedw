@@ -741,7 +741,8 @@ USING (
             SELECT 1 
             FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) e
             INNER JOIN bronze.leaseend_db_public.cars c 
-                ON TRIM(e.element) REGEXP '^[0-9]+$' 
+                ON LENGTH(TRIM(e.element)) = 6  -- Only 6-digit deal IDs
+                AND TRIM(e.element) REGEXP '^[0-9]+$' 
                 AND CAST(TRIM(e.element) AS INT) = c.deal_id
                 AND c.vin IS NOT NULL 
                 AND LENGTH(c.vin) = 17
