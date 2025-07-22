@@ -734,7 +734,10 @@ USING (
             AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
             AND am.transaction_subcategory != 'CHARGEBACK'  -- EXCLUDE chargeback accounts to prevent conflicts
             AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
-            AND t.approvalstatus = 2  -- ONLY approved multi-VIN (NULL approval multi-VIN excluded from Income Statement)
+            AND (
+                t.approvalstatus = 2  -- ONLY approved multi-VIN (NULL approval multi-VIN excluded from Income Statement)
+                OR (DATE_FORMAT(t.trandate, 'yyyy-MM') = '2025-04' AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL))  -- April exception - includes NULL approval
+            )
             AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
             AND tl.foreignamount != 0
             AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)
