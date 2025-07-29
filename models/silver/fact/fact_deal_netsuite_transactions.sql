@@ -171,6 +171,7 @@ USING (
           ('4110B', 'REVENUE', 'VSC', 'VOLUME_BONUS'),
           ('4110C', 'REVENUE', 'VSC', 'COST'),
           ('4111', 'REVENUE', 'VSC', 'CHARGEBACK'),
+          ('4115', 'REVENUE', 'VSC', 'REINSURANCE'),
           
           -- 4120 - REV - GAP
           ('4120', 'REVENUE', 'GAP', 'BASE'),
@@ -190,11 +191,6 @@ USING (
           ('4190', 'REVENUE', 'OTHER_REVENUE', 'BASE'),
           
           -- 5000 SERIES - COST OF REVENUE
-          -- 5110/5120 - VSC/GAP COR
-          ('5110', 'COST_OF_REVENUE', 'VSC', 'COST'),
-          ('5110A', 'COST_OF_REVENUE', 'VSC', 'ADVANCE'),
-          ('5120', 'COST_OF_REVENUE', 'GAP', 'COST'),
-          ('5120A', 'COST_OF_REVENUE', 'GAP', 'ADVANCE'),
           
           -- 5300 - DIRECT PEOPLE COST
           ('5301', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'FUNDING_CLERKS'),
@@ -334,6 +330,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
+        AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account
   ),
 
@@ -365,7 +362,7 @@ USING (
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
         AND t.trandate IS NOT NULL
-        AND tl.expenseaccount NOT IN (267, 269, 498, 499, 534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258) -- Exclude from VIN-only matching
+        AND tl.expenseaccount NOT IN (267, 269, 498, 499, 534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450) -- Exclude from VIN-only matching. Added 450 (7141 BANK FEES) since it's now handled by EXPENSE_DIRECT
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   ),
   
@@ -392,7 +389,7 @@ USING (
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND tl.foreignamount != 0
-          AND tl.expenseaccount NOT IN (267, 269, 498, 499, 534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258) -- Exclude from multi-VIN too
+          AND tl.expenseaccount NOT IN (267, 269, 498, 499, 534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450) -- Exclude from multi-VIN too. Added 450 (7141 BANK FEES) since it's now handled by EXPENSE_DIRECT
     ),
     
     vin_splits_raw AS (
@@ -495,6 +492,7 @@ USING (
           AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND so.amount != 0
+          AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
     ),
     
     vin_splits_raw AS (
@@ -598,6 +596,7 @@ USING (
         AND t.trandate IS NOT NULL
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
+        AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate)
   ),
   
@@ -642,6 +641,7 @@ USING (
         SUM(amount) AS total_amount
     FROM missing_vin_with_lookup
     WHERE resolved_vin IS NULL  -- Only transactions that still have no VIN after lookup
+      AND account NOT IN (563)  -- Exclude accounts handled by DIRECT method
     GROUP BY revenue_recognition_period, account
   ),
   
@@ -684,6 +684,7 @@ USING (
         SUM(amount) AS total_amount
     FROM missing_vin_with_lookup
     WHERE resolved_vin IS NOT NULL  -- Only transactions resolved via VIN lookup
+      AND account NOT IN (563)  -- Exclude accounts handled by DIRECT method
     GROUP BY resolved_vin, account
   ),
   
@@ -706,6 +707,7 @@ USING (
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
+        AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), so.account
   ),
   
@@ -721,12 +723,12 @@ USING (
     WHERE (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
         AND t.custbody_leaseend_vinno IS NULL -- This was the missing condition
         AND t.trandate IS NOT NULL
-        AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
+        AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE')
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Standard approval filter for consistency
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
-        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)  -- Exclude accounts handled by EXPENSE_DIRECT
+        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)  -- Exclude accounts handled by EXPENSE_DIRECT
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
     
     
@@ -835,8 +837,8 @@ USING (
                 AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
                 AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
                 AND tl.foreignamount != 0
-                AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)
-                AND tl.expenseaccount = 450  -- ONLY account 7141 BANK FEES for now
+                AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)
+                -- Removed specific account 450 filter since it's now handled by EXPENSE_DIRECT
         ) partial_allocations
         WHERE resolvable_elements > 0  -- Has some resolvable elements
             AND total_elements > resolvable_elements  -- Has some unresolvable elements
@@ -882,6 +884,7 @@ USING (
       AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND so.amount != 0
+      AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
 
         UNION ALL
 
@@ -919,12 +922,12 @@ USING (
 
     UNION ALL
 
-    -- Account-specific expense handling (ONLY for problematic accounts like 5402)
-    -- This captures ALL transactions for specific accounts that have reconciliation issues
+    -- Account-specific direct handling (for problematic accounts with reconciliation issues)
+    -- This captures ALL transactions for specific accounts, both revenue and expense
     SELECT
-      CONCAT('EXPENSE_DIRECT_', tl.expenseaccount, '_', t.id, '_', tl.id) as transaction_key,
+      CONCAT('DIRECT_', COALESCE(tl.expenseaccount, so.account), '_', t.id, '_', COALESCE(tl.id, so.uniquekey)) as transaction_key,
       CAST(COALESCE(t.custbody_le_deal_id, 0) AS STRING) as deal_key,
-      CAST(tl.expenseaccount AS STRING) as account_key,
+      CAST(COALESCE(tl.expenseaccount, so.account) AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
@@ -935,23 +938,25 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(tl.foreignamount * 100) AS BIGINT) as amount_cents,
-      CAST(tl.foreignamount AS DECIMAL(15,2)) as amount_dollars,
-      'EXPENSE_DIRECT' as allocation_method,  -- Direct capture for problematic accounts
+      CAST(ROUND(COALESCE(tl.foreignamount, so.amount) * 100) AS BIGINT) as amount_cents,
+      CAST(COALESCE(tl.foreignamount, so.amount) AS DECIMAL(15,2)) as amount_dollars,
+      'DIRECT' as allocation_method,  -- Direct capture for problematic accounts
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      'bronze.ns.transactionline' as _source_table,
-      FALSE AS has_credit_memo,  -- Credit memos handled separately for expenses
+      CASE WHEN tl.id IS NOT NULL THEN 'bronze.ns.transactionline' ELSE 'bronze.ns.salesinvoiced' END as _source_table,
+      FALSE AS has_credit_memo,  -- Credit memos handled separately
       CAST(0 AS INT) AS credit_memo_date_key,
       CAST(0 AS INT) AS credit_memo_time_key
-    FROM bronze.ns.transactionline tl
-    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
-    INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
-          WHERE am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM')  -- Include all expense transaction types
+    FROM bronze.ns.transaction t
+    LEFT JOIN bronze.ns.transactionline tl ON t.id = tl.transaction 
+      AND tl.expenseaccount IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)  -- Expense accounts only (excluding 563 since it's revenue)
+    LEFT JOIN bronze.ns.salesinvoiced so ON t.id = so.transaction 
+      AND so.account IN (563)  -- Revenue accounts only (4190 REBATES)
+    INNER JOIN account_mappings am ON COALESCE(tl.expenseaccount, so.account) = am.account_id
+    WHERE (tl.id IS NOT NULL OR so.uniquekey IS NOT NULL)  -- Must have either expense or revenue line
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM', 'SALESORD')  -- Include all transaction types
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-        AND tl.foreignamount != 0
-        AND tl.expenseaccount IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)  -- ONLY for problematic accounts - other accounts use existing VIN-based logic
+        AND COALESCE(tl.foreignamount, so.amount) != 0
 
     UNION ALL
 
@@ -1240,7 +1245,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
-        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258)  -- Exclude accounts handled by EXPENSE_DIRECT
+        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)  -- Exclude accounts handled by EXPENSE_DIRECT
 
     UNION ALL
 
