@@ -1311,15 +1311,75 @@ USING (
     LEFT JOIN bronze.ns.account a ON ftb.account_key = CAST(a.id AS STRING)
   ),
   
-  driver_rownum_4141 AS (
+  -- Driver count deals: Calculate net activity per deal per month following NetSuite business rules
+  -- Rule: Count deals in the month transactions occur (positive = +1, negative = -1)
+  monthly_driver_net_activity AS (
+    SELECT 
+      ftb.deal_key,
+      ftb.year,
+      ftb.month,
+      SUM(ftb.amount_dollars) as net_amount
+    FROM final_transactions_base ftb
+    INNER JOIN bronze.ns.account a ON ftb.account_key = CAST(a.id AS STRING)
+    WHERE ftb.deal_key IS NOT NULL
+      AND ftb.transaction_type = 'REVENUE'
+      AND ftb.amount_dollars != 0
+      AND (
+        -- Jan 2025 onwards: Count deals with 4141 titling fees
+        (ftb.year >= 2025 AND a.acctnumber = '4141')
+        OR
+        -- Before 2025: Count deals with 4130 doc fees  
+        (ftb.year < 2025 AND a.acctnumber = '4130')
+      )
+    GROUP BY ftb.deal_key, ftb.year, ftb.month
+  ),
+  
+  -- Driver count transactions: Mark transactions from deals that contribute to driver metrics  
+  -- NetSuite rule: Count deals with net activity in each month (positive = +1, negative = -1)
+  driver_count_eligible_deals AS (
+    SELECT DISTINCT
+      deal_key,
+      year,
+      month
+    FROM monthly_driver_net_activity
+    WHERE net_amount != 0  -- Include all deals with non-zero net activity per month
+  ),
+  
+  -- Ensure only ONE transaction per deal per month gets the driver count flag
+  driver_count_transactions_ranked AS (
+    SELECT
+      ftwai.transaction_key_unique,
+      ftwai.deal_key,
+      ftwai.year,
+      ftwai.month,
+      a.acctnumber,
+      ROW_NUMBER() OVER (
+        PARTITION BY ftwai.deal_key, ftwai.year, ftwai.month, a.acctnumber
+        ORDER BY ftwai.global_rownum
+      ) AS transaction_rank
+    FROM final_transactions_with_account_info ftwai
+    INNER JOIN driver_count_eligible_deals dced 
+      ON ftwai.deal_key = dced.deal_key 
+      AND ftwai.year = dced.year 
+      AND ftwai.month = dced.month
+    INNER JOIN bronze.ns.account a ON ftwai.account_key = CAST(a.id AS STRING)
+    WHERE ftwai.transaction_type = 'REVENUE'
+      AND ftwai.amount_dollars != 0
+      AND (
+        -- Jan 2025 onwards: 4141 titling fees
+        (ftwai.year >= 2025 AND a.acctnumber = '4141')
+        OR
+        -- Before 2025: 4130 doc fees
+        (ftwai.year < 2025 AND a.acctnumber = '4130')
+      )
+  ),
+  
+  driver_count_transactions AS (
     SELECT
       transaction_key_unique,
-      ROW_NUMBER() OVER (
-        PARTITION BY deal_key, vin
-        ORDER BY global_rownum
-      ) AS driver_rownum
-    FROM final_transactions_with_account_info
-    WHERE acctnumber = '4141' AND transaction_type = 'REVENUE'
+      TRUE as should_count_for_drivers
+    FROM driver_count_transactions_ranked
+    WHERE transaction_rank = 1  -- Only the first transaction per deal/month/account gets the flag
   )
   
   -- Add driver count calculation and final columns
@@ -1344,16 +1404,13 @@ USING (
     ftwai.amount_dollars,
     ftwai.allocation_method,
     ftwai.allocation_factor,
-    -- Titling fee driver count logic
-    CASE 
-      WHEN dr.driver_rownum = 1 THEN TRUE
-      ELSE FALSE
-    END AS is_driver_count,
+    -- Driver count logic: TRUE for qualifying fee transactions in deals that count toward driver metrics
+    COALESCE(dct.should_count_for_drivers, FALSE) AS is_driver_count,
     ftwai._source_table,
     current_timestamp() AS _load_timestamp
   FROM final_transactions_with_account_info ftwai
-  LEFT JOIN driver_rownum_4141 dr
-      ON ftwai.transaction_key_unique = dr.transaction_key_unique
+  LEFT JOIN driver_count_transactions dct
+      ON ftwai.transaction_key_unique = dct.transaction_key_unique
 
 ) AS source
 ON target.transaction_key = source.transaction_key
