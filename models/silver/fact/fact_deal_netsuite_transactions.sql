@@ -124,6 +124,37 @@ USING (
     GROUP BY revenue_recognition_period
   ),
   
+  -- Accounts handled by DIRECT method (by account number for maintainability)
+  direct_method_accounts AS (
+    SELECT account_number FROM VALUES
+      ('5301'), -- IC FUNDING CLERKS
+      ('5304'), -- IC PAYOFF TEAM  
+      ('5320'), -- IC TITLE CLERKS
+      ('5330'), -- EMPLOYEE BENEFITS
+      ('5340'), -- PAYROLL TAX
+      ('5510'), -- POSTAGE
+      ('5520'), -- BANK BUYOUT FEES
+      ('5530'), -- TITLE COR
+      ('6110'), -- SALARIES
+      ('6120'), -- COMMISSIONS
+      ('6130'), -- BONUSES
+      ('6140'), -- EMPLOYEE BENEFITS
+      ('6150'), -- PAYROLL TAX
+      ('6210'), -- CONTRACTOR FEES
+      ('6310'), -- RENT
+      ('6320'), -- UTILITIES
+      ('6330'), -- INSURANCE
+      ('6340'), -- OFFICE SUPPLIES
+      ('6350'), -- TELEPHONE
+      ('6410'), -- PROFESSIONAL FEES
+      ('6420'), -- LEGAL FEES
+      ('6510'), -- ADVERTISING
+      ('6520'), -- MARKETING
+      ('7141'), -- BANK FEES (account 450)
+      ('4190')  -- REBATES (account 563)
+    AS t(account_number)
+  ),
+
   -- Comprehensive account mapping that captures ALL NetSuite accounts with transactions
   -- Combines explicit business mappings with automated classification based on NetSuite account types
   account_mappings AS (
@@ -226,6 +257,9 @@ USING (
     -- Include ALL transactional accounts with appropriate classification
     SELECT 
       ata.account_id,
+      a.acctnumber as account_number, -- Add account number for easier filtering
+      -- Flag for accounts handled by DIRECT method
+      CASE WHEN dma.account_number IS NOT NULL THEN TRUE ELSE FALSE END as is_direct_method_account,
       -- Use business override if exists, otherwise auto-classify based on account number ranges AND NetSuite account type
       COALESCE(
         bao.transaction_type,
@@ -305,6 +339,7 @@ USING (
     FROM all_transactional_accounts ata
     INNER JOIN bronze.ns.account a ON ata.account_id = a.id
     LEFT JOIN business_account_overrides bao ON ata.account_id = bao.account_id
+    LEFT JOIN direct_method_accounts dma ON a.acctnumber = dma.account_number
     WHERE a._fivetran_deleted = FALSE
       AND (a.isinactive != 'T' OR a.isinactive IS NULL)
   ),
@@ -330,7 +365,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
-        AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account
   ),
 
@@ -362,7 +397,7 @@ USING (
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
         AND t.trandate IS NOT NULL
-        AND tl.expenseaccount NOT IN (267, 269, 498, 499, 534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450) -- Exclude from VIN-only matching. Added 450 (7141 BANK FEES) since it's now handled by EXPENSE_DIRECT
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   ),
   
@@ -389,7 +424,7 @@ USING (
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND tl.foreignamount != 0
-          AND tl.expenseaccount NOT IN (267, 269, 498, 499, 534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450) -- Exclude from multi-VIN too. Added 450 (7141 BANK FEES) since it's now handled by EXPENSE_DIRECT
+          AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     ),
     
     vin_splits_raw AS (
@@ -492,7 +527,7 @@ USING (
           AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND so.amount != 0
-          AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
+          AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     ),
     
     vin_splits_raw AS (
@@ -596,7 +631,7 @@ USING (
         AND t.trandate IS NOT NULL
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
-        AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate)
   ),
   
@@ -639,9 +674,10 @@ USING (
         revenue_recognition_period,
         account,
         SUM(amount) AS total_amount
-    FROM missing_vin_with_lookup
+    FROM missing_vin_with_lookup mvwl
+    INNER JOIN account_mappings am ON mvwl.account = am.account_id
     WHERE resolved_vin IS NULL  -- Only transactions that still have no VIN after lookup
-      AND account NOT IN (563)  -- Exclude accounts handled by DIRECT method
+      AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY revenue_recognition_period, account
   ),
   
@@ -682,9 +718,10 @@ USING (
         resolved_vin as vin,
         account,
         SUM(amount) AS total_amount
-    FROM missing_vin_with_lookup
+    FROM missing_vin_with_lookup mvwl2
+    INNER JOIN account_mappings am ON mvwl2.account = am.account_id
     WHERE resolved_vin IS NOT NULL  -- Only transactions resolved via VIN lookup
-      AND account NOT IN (563)  -- Exclude accounts handled by DIRECT method
+      AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY resolved_vin, account
   ),
   
@@ -707,7 +744,7 @@ USING (
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
-        AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), so.account
   ),
   
@@ -728,7 +765,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Standard approval filter for consistency
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
-        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)  -- Exclude accounts handled by EXPENSE_DIRECT
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
     
     
@@ -837,8 +874,7 @@ USING (
                 AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
                 AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
                 AND tl.foreignamount != 0
-                AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)
-                -- Removed specific account 450 filter since it's now handled by EXPENSE_DIRECT
+                AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
         ) partial_allocations
         WHERE resolvable_elements > 0  -- Has some resolvable elements
             AND total_elements > resolvable_elements  -- Has some unresolvable elements
@@ -884,7 +920,7 @@ USING (
       AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND so.amount != 0
-      AND so.account NOT IN (563)  -- Exclude accounts handled by DIRECT method
+      AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
 
         UNION ALL
 
@@ -948,11 +984,10 @@ USING (
       CAST(0 AS INT) AS credit_memo_time_key
     FROM bronze.ns.transaction t
     LEFT JOIN bronze.ns.transactionline tl ON t.id = tl.transaction 
-      AND tl.expenseaccount IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)  -- Expense accounts only (excluding 563 since it's revenue)
     LEFT JOIN bronze.ns.salesinvoiced so ON t.id = so.transaction 
-      AND so.account IN (563)  -- Revenue accounts only (4190 REBATES)
     INNER JOIN account_mappings am ON COALESCE(tl.expenseaccount, so.account) = am.account_id
     WHERE (tl.id IS NOT NULL OR so.uniquekey IS NOT NULL)  -- Must have either expense or revenue line
+        AND am.is_direct_method_account = TRUE  -- Only process accounts handled by DIRECT method
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM', 'SALESORD')  -- Include all transaction types
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -1245,7 +1280,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
-        AND tl.expenseaccount NOT IN (534, 565, 254, 533, 251, 257, 541, 532, 256, 253, 539, 447, 678, 676, 504, 459, 258, 609, 450)  -- Exclude accounts handled by EXPENSE_DIRECT
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
 
     UNION ALL
 
