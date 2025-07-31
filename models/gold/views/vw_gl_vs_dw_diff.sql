@@ -26,9 +26,11 @@ ns_posted AS (
         MONTH(t.trandate) AS month,
         SUM(
             CASE
+                WHEN a.acctnumber IN ('4107', '4111', '4121')  -- Chargeback accounts: keep negative in both systems
+                     THEN tal.amount
                 WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999
-                     THEN tal.amount * -1      -- flip sign for revenue accounts to be positive
-                ELSE tal.amount * -1           -- flip sign for expense accounts to be negative
+                     THEN tal.amount * -1  -- Flip other revenue accounts to positive to match fact table
+                ELSE tal.amount            -- Keep expense accounts as-is (positive)
             END
         ) AS posted_total
     FROM bronze.ns.transactionaccountingline tal
@@ -56,7 +58,13 @@ ns_total AS (
             a.fullname AS account_name,
             YEAR(t.trandate) AS year,
             MONTH(t.trandate) AS month,
-            SUM(si.amount) AS total_amount  -- Revenue amounts are already positive in salesinvoiced
+            SUM(
+                CASE
+                    WHEN a.acctnumber IN ('4107', '4111', '4121')  -- Chargeback accounts: keep negative
+                         THEN si.amount * -1
+                    ELSE si.amount  -- Other revenue amounts are already positive in salesinvoiced
+                END
+            ) AS total_amount
         FROM bronze.ns.salesinvoiced si
         JOIN bronze.ns.transaction t ON si.transaction = t.id
         JOIN bronze.ns.account a ON si.account = a.id
@@ -72,7 +80,7 @@ ns_total AS (
             a.fullname AS account_name,
             YEAR(t.trandate) AS year,
             MONTH(t.trandate) AS month,
-            SUM(tl.foreignamount) AS total_amount  -- flip sign for expense accounts to be negative
+            SUM(tl.foreignamount) AS total_amount  -- Keep expense accounts as-is (positive)
         FROM bronze.ns.transactionline tl
         JOIN bronze.ns.transaction t ON tl.transaction = t.id
         JOIN bronze.ns.account a ON tl.expenseaccount = a.id

@@ -24,8 +24,8 @@ ns_posted AS (
         MONTH(t.trandate) AS month,
         SUM(
             CASE
-                WHEN a.acctnumber IN ('4107', '4111', '4121')  -- Chargeback accounts: keep negative in both systems
-                     THEN tal.amount
+                WHEN a.acctnumber IN ('4107', '4111', '4121')  -- Chargeback accounts: flip to negative to match DW
+                     THEN tal.amount * -1
                 WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999
                      THEN tal.amount * -1  -- Flip other revenue accounts to positive to match fact table
                 ELSE tal.amount            -- Keep expense accounts as-is (positive)
