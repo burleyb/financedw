@@ -373,7 +373,7 @@ USING (
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND t.custbody_le_deal_id IS NOT NULL
         AND t.custbody_le_deal_id != 0
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -460,7 +460,7 @@ USING (
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- VIN_ONLY: Only transactions without deal_ids
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND t.trandate IS NOT NULL
@@ -577,7 +577,7 @@ USING (
              OR t.custbody_leaseend_vinno LIKE '% %')    -- Include VINs with spaces (not real VINs)
         AND (t.custbody_leaseend_vinno IS NULL OR t.custbody_leaseend_vinno NOT LIKE '%,%')  -- EXCLUDE multi-VIN with NULL handling
         AND t.trandate IS NOT NULL
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include GENJRNL for revenue like 4106 Reserve Bonus
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include GENJRNL for revenue like 4106 Reserve Bonus
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -647,7 +647,7 @@ USING (
       AND t.custbody_leaseend_vinno NOT LIKE '%,%'
       AND t.custbody_le_deal_id IS NOT NULL
       AND t.custbody_le_deal_id != 0
-      AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
+      AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include invoice & journal revenue entries
       AND am.transaction_type = 'REVENUE'
       AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -884,7 +884,7 @@ USING (
     WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions only
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
