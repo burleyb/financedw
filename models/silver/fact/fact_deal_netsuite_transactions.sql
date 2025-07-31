@@ -128,6 +128,14 @@ USING (
   -- Accounts handled by DIRECT method (by account number for maintainability)
   direct_method_accounts AS (
     SELECT account_number FROM VALUES
+      ('5100'), -- COR - LEASE BUYOUT - TYPE B FIX: Major GENJRNL variances
+      ('5121'), -- COR - GAP CHARGEBACK - TYPE B FIX: Unallocated variances
+      ('5138'), -- COR - PENALTIES AND LATE FEES - TYPE B FIX: Operational transactions
+      ('5139'), -- COR - REGISTRATION - TYPE B FIX: Non-posted transaction issues
+      ('5140'), -- COR - SALES TAX - TYPE B FIX: Non-posted transaction issues  
+      ('5141'), -- COR - TITLE ONLY FEES - TYPE B FIX: Non-posted transaction issues
+      ('5210'), -- COR - ACQUISITION - TYPE B FIX: MAJOR $400K+/month GENJRNL variances
+      ('5213'), -- TRANSPORTATION - TYPE B FIX: Small operational variances
       ('5301'), -- IC FUNDING CLERKS
       ('5304'), -- IC PAYOFF TEAM  
       ('5320'), -- IC TITLE CLERKS
@@ -141,12 +149,19 @@ USING (
       ('5510'), -- POSTAGE
       ('5520'), -- BANK BUYOUT FEES
       ('5530'), -- TITLE COR
+      ('6000'), -- MANAGER COMP - TYPE B FIX: Major payroll variances from GENJRNL+PAY CHK
+      ('6010'), -- COMMISSION - TYPE B FIX: Major commission variances from GENJRNL+PAY CHK
       ('6011'), -- SALESPERSON GUARANTEE - ADDED to fix reconciliation issues
+      ('6012'), -- FUNDING CLERK COMP - TYPE B FIX: Compensation variances from payroll
+      ('6030'), -- HOURLY - TYPE B FIX: Major payroll variances from GENJRNL+PAY CHK
+      ('6040'), -- DEVELOPER COMP - TYPE B FIX: Major compensation variances from payroll
+      ('6100'), -- EMP BENEFITS - TYPE B FIX: Benefits variances from GENJRNL+BILL  
       ('6110'), -- SALARIES
       ('6120'), -- COMMISSIONS
       ('6130'), -- BONUSES
       ('6140'), -- EMPLOYEE BENEFITS
       ('6150'), -- PAYROLL TAX
+      ('6200'), -- PAYROLL TAX - TYPE B FIX: Major tax variances from GENJRNL+PAY CHK
       ('6210'), -- CONTRACTOR FEES
       ('6310'), -- RENT
       ('6320'), -- UTILITIES
@@ -157,6 +172,10 @@ USING (
       ('6420'), -- LEGAL FEES
       ('6510'), -- ADVERTISING
       ('6520'), -- MARKETING
+      ('7001'), -- PAYOFF VARIANCE - TYPE B FIX: Operational adjustment transactions
+      ('7004'), -- SALES TAX VARIANCE - TYPE B FIX: Tax variance adjustments
+      ('7005'), -- REGISTRATION VARIANCE - TYPE B FIX: Registration variance adjustments
+      ('7007'), -- PENALTIES - TYPE B FIX: Penalty transactions
       ('7110'), -- OFFICE SUPPLIES - ADDED to fix reconciliation issues  
       ('7141'), -- BANK FEES (account 450)
       ('7160'), -- TRAVEL & ENTERTAINMENT - ADDED to capture individual transactions instead of allocation
@@ -377,6 +396,7 @@ USING (
         AND am.transaction_type = 'REVENUE'
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account
@@ -402,6 +422,7 @@ USING (
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.foreignamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount
@@ -433,6 +454,7 @@ USING (
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.foreignamount != 0
         AND t.trandate IS NOT NULL
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
@@ -465,6 +487,7 @@ USING (
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND t.trandate IS NOT NULL
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate)
@@ -502,6 +525,7 @@ USING (
           AND t.custbody_le_deal_id IS NOT NULL
           AND am.transaction_type = 'REVENUE'
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+          AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
           AND so.amount != 0
     )
     -- Only include transactions that still can't be resolved after VIN lookup
@@ -546,6 +570,7 @@ USING (
           AND t.custbody_le_deal_id IS NOT NULL
           AND am.transaction_type = 'REVENUE'
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+          AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
           AND so.amount != 0
     )
     -- Include transactions that were resolved via VIN lookup
@@ -563,6 +588,7 @@ USING (
 
   
   -- Unallocated transactions (not tied to any deal) - SEPARATE from deal-based transactions
+  -- ENHANCED: Handle both salesinvoiced and transactionline for revenue accounts
   unallocated_revenue AS (
     SELECT
         DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
@@ -581,6 +607,7 @@ USING (
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), so.account
@@ -605,6 +632,7 @@ USING (
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Standard approval filter for consistency
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.foreignamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
@@ -651,6 +679,7 @@ USING (
       AND am.transaction_type = 'REVENUE'
       AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
       AND so.amount != 0
       AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY t.id, t.custbody_le_deal_id, so.account, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory
@@ -693,6 +722,7 @@ USING (
       AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
       AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
       AND tl.foreignamount != 0
       AND am.is_direct_method_account = FALSE
     GROUP BY t.id, t.custbody_le_deal_id, tl.expenseaccount, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory
@@ -729,6 +759,7 @@ USING (
     WHERE am.transaction_subcategory = 'CHARGEBACK'  -- Only chargeback accounts (4107, 4111, 4121)
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.foreignamount != 0
 
     UNION ALL
@@ -889,6 +920,7 @@ USING (
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY t.id, so.account, t.trandate, am.transaction_type, am.transaction_category, am.transaction_subcategory
@@ -928,6 +960,7 @@ USING (
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.foreignamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY t.id, tl.expenseaccount, t.trandate, am.transaction_type, am.transaction_category, am.transaction_subcategory
@@ -1033,6 +1066,7 @@ USING (
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.foreignamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
 
@@ -1073,6 +1107,7 @@ USING (
         AND am.transaction_subcategory != 'CHARGEBACK'
         AND t.trandate IS NOT NULL
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE
         -- Only include VINs that don't exist in our deal lookup tables
