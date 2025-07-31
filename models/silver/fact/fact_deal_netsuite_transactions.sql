@@ -615,7 +615,7 @@ USING (
   
   -- Combine VIN-matching and allocated amounts
   final_transactions_base AS (
-    -- VIN-matching revenue transactions
+    -- VIN-matching revenue transactions (consolidated by NetSuite transaction ID)
     SELECT
       CONCAT(t.custbody_le_deal_id, '_', so.account, '_', t.id, '_REVENUE') as transaction_key,
       CAST(t.custbody_le_deal_id AS STRING) as deal_key,
@@ -630,14 +630,14 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(so.amount * 100) AS BIGINT) as amount_cents,
-      CAST(so.amount AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(SUM(so.amount) * 100) AS BIGINT) as amount_cents,
+      CAST(SUM(so.amount) AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.salesinvoiced' as _source_table,
-      CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
+      CASE WHEN MAX(CASE WHEN cmv.vin IS NOT NULL THEN 1 ELSE 0 END) = 1 THEN TRUE ELSE FALSE END AS has_credit_memo,
+      COALESCE(CAST(DATE_FORMAT(MAX(cmv.credit_memo_date), 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+      COALESCE(CAST(DATE_FORMAT(MAX(cmv.credit_memo_date), 'HHmmss') AS INT), 0) AS credit_memo_time_key
     FROM bronze.ns.salesinvoiced so
     INNER JOIN bronze.ns.transaction t ON so.transaction = t.id
     INNER JOIN account_mappings am ON so.account = am.account_id
@@ -653,10 +653,11 @@ USING (
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND so.amount != 0
       AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+    GROUP BY t.id, t.custbody_le_deal_id, so.account, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
         UNION ALL
 
-    -- VIN-matching expense transactions  
+    -- VIN-matching expense transactions (consolidated by NetSuite transaction ID)
     SELECT
       CONCAT(t.custbody_le_deal_id, '_', tl.expenseaccount, '_', t.id, '_EXPENSE') as transaction_key,
       CAST(t.custbody_le_deal_id AS STRING) as deal_key,
@@ -671,14 +672,14 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(tl.foreignamount * 100) AS BIGINT) as amount_cents,
-      CAST(tl.foreignamount AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(SUM(tl.foreignamount) * 100) AS BIGINT) as amount_cents,
+      CAST(SUM(tl.foreignamount) AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
-      CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
+      CASE WHEN MAX(CASE WHEN cmv.vin IS NOT NULL THEN 1 ELSE 0 END) = 1 THEN TRUE ELSE FALSE END AS has_credit_memo,
+      COALESCE(CAST(DATE_FORMAT(MAX(cmv.credit_memo_date), 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+      COALESCE(CAST(DATE_FORMAT(MAX(cmv.credit_memo_date), 'HHmmss') AS INT), 0) AS credit_memo_time_key
     FROM bronze.ns.transactionline tl
     INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -694,6 +695,7 @@ USING (
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND tl.foreignamount != 0
       AND am.is_direct_method_account = FALSE
+    GROUP BY t.id, t.custbody_le_deal_id, tl.expenseaccount, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
     UNION ALL
 
@@ -782,6 +784,7 @@ USING (
           AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM')  -- Exclude SALESORD for 100% GL accuracy
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+          AND (t.posting = 'T' OR t.posting IS NULL)  -- FIXED: Only include posted transactions to match NetSuite GL accuracy
           AND COALESCE(tl.foreignamount, so.amount) != 0
           AND t.trandate <= CURRENT_DATE()  -- Only include transactions up to today
     ) deduped
@@ -855,9 +858,9 @@ USING (
     UNION ALL
 
     -- Multi-VIN revenue transactions as unallocated (for GL reconciliation accuracy)
-    -- Don't split multi-VIN transactions - capture them as NetSuite records them  
+    -- Consolidate by transaction ID to match NetSuite's transaction-level reporting
     SELECT
-      CONCAT('MULTI_VIN_', t.id, '_', so.account, '_', so.uniquekey) as transaction_key,
+      CONCAT('MULTI_VIN_', t.id, '_', so.account, '_REVENUE') as transaction_key,
       NULL as deal_key,  -- Multi-VIN transactions can't be accurately allocated to specific deals
       CAST(so.account AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
@@ -870,8 +873,8 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(so.amount * 100) AS BIGINT) as amount_cents,
-      CAST(so.amount AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(SUM(so.amount) * 100) AS BIGINT) as amount_cents,
+      CAST(SUM(so.amount) AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.salesinvoiced' as _source_table,
@@ -888,13 +891,14 @@ USING (
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+    GROUP BY t.id, so.account, t.trandate, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
     UNION ALL
 
     -- Multi-VIN expense transactions as unallocated (for GL reconciliation accuracy)
-    -- Don't split multi-VIN transactions - capture them as NetSuite records them
+    -- Consolidate by transaction ID to match NetSuite's transaction-level reporting
     SELECT
-      CONCAT('MULTI_VIN_', t.id, '_', tl.expenseaccount, '_', CAST(ROUND(tl.foreignamount * 100) AS BIGINT)) as transaction_key,
+      CONCAT('MULTI_VIN_', t.id, '_', tl.expenseaccount, '_EXPENSE') as transaction_key,
       NULL as deal_key,  -- Multi-VIN transactions can't be accurately allocated to specific deals
       CAST(tl.expenseaccount AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
@@ -907,8 +911,8 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(tl.foreignamount * 100) AS BIGINT) as amount_cents,
-      CAST(tl.foreignamount AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(SUM(tl.foreignamount) * 100) AS BIGINT) as amount_cents,
+      CAST(SUM(tl.foreignamount) AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
@@ -926,6 +930,7 @@ USING (
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+    GROUP BY t.id, tl.expenseaccount, t.trandate, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
     UNION ALL
 
@@ -1030,6 +1035,59 @@ USING (
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND tl.foreignamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+
+    UNION ALL
+
+    -- Orphaned VIN revenue transactions (VIN exists but not in our deal tables)
+    SELECT
+      CONCAT('ORPHANED_VIN_', t.id, '_', so.account, '_REVENUE') as transaction_key,
+      NULL as deal_key,  -- Can't link to deal since VIN not in our tables
+      CAST(so.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(t.custbody_leaseend_vinno) as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND(SUM(so.amount) * 100) AS BIGINT) as amount_cents,
+      CAST(SUM(so.amount) AS DECIMAL(15,2)) as amount_dollars,
+      'ORPHANED_VIN' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.salesinvoiced' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key
+    FROM bronze.ns.salesinvoiced so
+    INNER JOIN bronze.ns.transaction t ON so.transaction = t.id
+    INNER JOIN account_mappings am ON so.account = am.account_id
+    WHERE LENGTH(t.custbody_leaseend_vinno) = 17
+        AND t.custbody_leaseend_vinno IS NOT NULL
+        AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Single VIN only
+        AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- No deal ID
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')
+        AND am.transaction_type = 'REVENUE'
+        AND am.transaction_subcategory != 'CHARGEBACK'
+        AND t.trandate IS NOT NULL
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND so.amount != 0
+        AND am.is_direct_method_account = FALSE
+        -- Only include VINs that don't exist in our deal lookup tables
+        AND NOT EXISTS (
+          SELECT 1 FROM bronze.leaseend_db_public.cars c 
+          WHERE UPPER(c.vin) = UPPER(t.custbody_leaseend_vinno)
+            AND c.vin IS NOT NULL AND LENGTH(c.vin) = 17
+            AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM silver.finance.bridge_vin_deal bd
+          WHERE UPPER(bd.vin) = UPPER(t.custbody_leaseend_vinno)
+            AND bd.is_active = TRUE AND bd.vin IS NOT NULL AND LENGTH(bd.vin) = 17
+        )
+    GROUP BY t.id, so.account, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
     UNION ALL
 
