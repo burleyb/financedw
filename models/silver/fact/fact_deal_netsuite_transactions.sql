@@ -1,7 +1,8 @@
 -- models/silver/fact/fact_deal_netsuite_transactions.sql
 -- Normalized NetSuite fact table with account foreign keys for flexible pivoting
 
--- Drop and recreate table to ensure correct schema
+-- Drop and recreate table to ensure correct schemaBS
+
 DROP TABLE IF EXISTS silver.finance.fact_deal_netsuite_transactions;
 
 
@@ -132,9 +133,15 @@ USING (
       ('5320'), -- IC TITLE CLERKS
       ('5330'), -- EMPLOYEE BENEFITS
       ('5340'), -- PAYROLL TAX
+      ('5400'), -- COR - PAYOFF EXPENSE - ADDED to capture GENJRNL/BILLCRED/CC expenses without deal_id
+      ('5401'), -- COR - SALES TAX EXPENSE - ADDED to capture GENJRNL expenses without deal_id
+      ('5402'), -- COR - REGISTRATION EXPENSE - ADDED to capture GENJRNL/BILLCRED/CC expenses without deal_id
+      ('5403'), -- COR - CUSTOMER EXPERIENCE - ADDED to capture CC/BILLCRED/GENJRNL expenses without deal_id
+      ('5404'), -- COR - PENALTIES - ADDED to capture GENJRNL expenses without deal_id
       ('5510'), -- POSTAGE
       ('5520'), -- BANK BUYOUT FEES
       ('5530'), -- TITLE COR
+      ('6011'), -- SALESPERSON GUARANTEE - ADDED to fix reconciliation issues
       ('6110'), -- SALARIES
       ('6120'), -- COMMISSIONS
       ('6130'), -- BONUSES
@@ -150,8 +157,13 @@ USING (
       ('6420'), -- LEGAL FEES
       ('6510'), -- ADVERTISING
       ('6520'), -- MARKETING
+      ('7110'), -- OFFICE SUPPLIES - ADDED to fix reconciliation issues  
       ('7141'), -- BANK FEES (account 450)
-      ('4190')  -- REBATES (account 563)
+      ('7160'), -- TRAVEL & ENTERTAINMENT - ADDED to capture individual transactions instead of allocation
+      ('7170'), -- RENT & LEASE - ADDED to capture individual transactions instead of allocation  
+      ('7180')  -- INTERNET & TELEPHONE - ADDED to fix reconciliation issues
+      -- REMOVED: ('4106') -- REV - RESERVE BONUS - REMOVED: Revenue accounts shouldn't use DIRECT method
+      -- REMOVED: ('4190')  -- REBATES (account 563) - should use normal revenue allocation methods
     AS t(account_number)
   ),
 
@@ -369,6 +381,30 @@ USING (
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account
   ),
 
+  -- VIN-matching expenses - USE TRANSACTIONLINE for expense accounts
+  -- MUST have BOTH VIN AND Deal ID to be considered VIN-matching
+  -- Only match EXACT 17-character VINs (no commas or multiple VINs)
+  vin_matching_expenses AS (
+    SELECT
+        UPPER(t.custbody_leaseend_vinno) as vin,
+        tl.expenseaccount as account,
+        SUM(tl.foreignamount) AS total_amount
+    FROM bronze.ns.transactionline AS tl
+    INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
+    INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
+    WHERE LENGTH(t.custbody_leaseend_vinno) = 17
+        AND t.custbody_leaseend_vinno IS NOT NULL
+        AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
+        AND t.custbody_le_deal_id IS NOT NULL
+        AND t.custbody_le_deal_id != 0
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Exclude SALESORD for 100% GL accuracy
+        AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
+        AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND tl.foreignamount != 0
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+    GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount
+  ),
   
   -- VIN-only expenses - USE TRANSACTIONLINE for expense accounts 
   -- Captures VINs that either have no deal_id OR have deal_id but don't match our VIN_MATCH criteria
@@ -383,14 +419,15 @@ USING (
         YEAR(t.trandate) as transaction_year,
         MONTH(t.trandate) as transaction_month,
         t.trandate,
-        SUM(tl.foreignamount) AS total_amount  -- Raw NetSuite sign
+        SUM(tl.foreignamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
     WHERE LENGTH(t.custbody_leaseend_vinno) = 17
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
-        -- VIN_ONLY: All single-VIN expense transactions (regardless of deal_id presence)
+        -- VIN_ONLY: Only single-VIN expense transactions WITHOUT deal_ids
+        AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- VIN_ONLY: Only transactions without deal_ids
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
@@ -401,211 +438,8 @@ USING (
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
   ),
   
-  -- Multi-VIN transaction splitting for expenses
-  multi_vin_expenses AS (
-    WITH multi_vin_raw AS (
-      SELECT
-          t.id as transaction_id,
-          tl.id as transaction_line_id,  -- Add line ID to ensure each line is processed separately
-          t.trandate,
-          t.custbody_leaseend_vinno as vin_list,
-          tl.expenseaccount as account,
-          tl.foreignamount as total_amount,  -- Raw NetSuite sign
-          am.transaction_type,
-          am.transaction_category,
-          am.transaction_subcategory
-      FROM bronze.ns.transactionline tl
-      INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
-      INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
-      WHERE t.custbody_leaseend_vinno IS NOT NULL
-          AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
-          AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
-          AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
-          AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-          AND tl.foreignamount != 0
-          AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
-    ),
-    
-    vin_splits_raw AS (
-      SELECT
-          mvr.transaction_id,
-          mvr.transaction_line_id,  -- Propagate line ID  
-          mvr.trandate,
-          mvr.account,
-          mvr.total_amount,
-          mvr.transaction_type,
-          mvr.transaction_category,
-          mvr.transaction_subcategory,
-          TRIM(vin_element.col) as raw_element,
-          -- Determine if element is a deal ID (6 digits) or VIN (17 chars)
-          CASE 
-              WHEN LENGTH(TRIM(vin_element.col)) = 6 AND TRIM(vin_element.col) REGEXP '^[0-9]+$' THEN 'DEAL_ID'
-              WHEN LENGTH(TRIM(vin_element.col)) = 17 THEN 'VIN'
-              ELSE 'OTHER'
-          END as element_type,
-          SIZE(SPLIT(mvr.vin_list, ',')) as element_count,
-          vin_element.pos as element_pos
-      FROM multi_vin_raw mvr
-      LATERAL VIEW posexplode(SPLIT(mvr.vin_list, ',')) vin_element AS pos, col
-      WHERE LENGTH(TRIM(vin_element.col)) >= 5
-    ),
-    
-    vin_splits_with_lookup AS (
-      SELECT
-          vsr.*,
-          -- Look up VIN for deal IDs, use as-is for VINs
-          COALESCE(
-              CASE 
-                  WHEN vsr.element_type = 'DEAL_ID' THEN UPPER(c.vin)
-                  WHEN vsr.element_type = 'VIN' THEN UPPER(vsr.raw_element)
-                  ELSE NULL
-              END
-          ) as resolved_vin
-      FROM vin_splits_raw vsr
-      LEFT JOIN bronze.leaseend_db_public.cars c ON 
-          vsr.element_type = 'DEAL_ID'
-          AND TRY_CAST(vsr.raw_element AS INT) = c.deal_id
-          AND TRY_CAST(vsr.raw_element AS INT) IS NOT NULL
-          AND c.vin IS NOT NULL
-          AND LENGTH(c.vin) = 17
-          AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
-    ),
-    
-    vin_splits_valid AS (
-      SELECT
-          vswl.*,
-          -- integer cents for accuracy
-          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) AS total_cents,
-          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count AS base_split_cents,
-          pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) AS remainder_cents,
-          -- allocate ALL remainder cents to the FIRST VALID VIN only
-          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count + 
-          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents,
-          -- Add deduplication info: mark if this is the first occurrence of a duplicate VIN per transaction LINE
-          ROW_NUMBER() OVER (PARTITION BY vswl.transaction_id, vswl.transaction_line_id, vswl.resolved_vin ORDER BY vswl.element_pos) as vin_occurrence_rank
-      FROM vin_splits_with_lookup vswl
-      WHERE vswl.resolved_vin IS NOT NULL  -- Only include successfully resolved VINs
-    )
-    
-    SELECT
-        vsv.resolved_vin as vin,
-        vsv.account,
-        vsv.trandate,
-        YEAR(vsv.trandate) as transaction_year,
-        MONTH(vsv.trandate) as transaction_month,
-        vsv.transaction_type,
-        vsv.transaction_category,
-        vsv.transaction_subcategory,
-        -- Only include the first occurrence of each VIN to prevent double-counting duplicates per transaction line
-        SUM(CASE WHEN vsv.vin_occurrence_rank = 1 THEN vsv.split_cents ELSE 0 END) / 100.0 as total_amount
-    FROM vin_splits_valid vsv
-    GROUP BY vsv.resolved_vin, vsv.account, vsv.trandate, YEAR(vsv.trandate), MONTH(vsv.trandate),
-             vsv.transaction_type, vsv.transaction_category, vsv.transaction_subcategory
-  ),
-  
-  -- Multi-VIN transaction splitting for revenue
-  multi_vin_revenue AS (
-    WITH multi_vin_raw AS (
-      SELECT
-          t.id as transaction_id,
-          so.uniquekey as sales_line_id,  -- Use uniquekey as the line ID for salesinvoiced
-          t.trandate,
-          t.custbody_leaseend_vinno as vin_list,
-          so.account,
-          so.amount as total_amount,
-          am.transaction_type,
-          am.transaction_category,
-          am.transaction_subcategory
-      FROM bronze.ns.salesinvoiced so
-      INNER JOIN bronze.ns.transaction t ON so.transaction = t.id
-      INNER JOIN account_mappings am ON so.account = am.account_id
-      WHERE t.custbody_leaseend_vinno IS NOT NULL
-          AND t.custbody_leaseend_vinno LIKE '%,%'  -- Only multi-VIN transactions
-          AND am.transaction_type = 'REVENUE'
-          AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
-          AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')
-          AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-          AND so.amount != 0
-          AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
-    ),
-    
-    vin_splits_raw AS (
-      SELECT
-          mvr.transaction_id,
-          mvr.sales_line_id,  -- Propagate sales line ID
-          mvr.trandate,
-          mvr.account,
-          mvr.total_amount,
-          mvr.transaction_type,
-          mvr.transaction_category,
-          mvr.transaction_subcategory,
-          TRIM(vin_element.col) as raw_element,
-          -- Determine if element is a deal ID (6 digits) or VIN (17 chars)
-          CASE 
-              WHEN LENGTH(TRIM(vin_element.col)) = 6 AND TRIM(vin_element.col) REGEXP '^[0-9]+$' THEN 'DEAL_ID'
-              WHEN LENGTH(TRIM(vin_element.col)) = 17 THEN 'VIN'
-              ELSE 'OTHER'
-          END as element_type,
-          SIZE(SPLIT(mvr.vin_list, ',')) as element_count,
-          vin_element.pos as element_pos
-      FROM multi_vin_raw mvr
-      LATERAL VIEW posexplode(SPLIT(mvr.vin_list, ',')) vin_element AS pos, col
-      WHERE LENGTH(TRIM(vin_element.col)) >= 5
-    ),
-    
-    vin_splits_with_lookup AS (
-      SELECT
-          vsr.*,
-          -- Look up VIN for deal IDs, use as-is for VINs
-          COALESCE(
-              CASE 
-                  WHEN vsr.element_type = 'DEAL_ID' THEN UPPER(c.vin)
-                  WHEN vsr.element_type = 'VIN' THEN UPPER(vsr.raw_element)
-                  ELSE NULL
-              END
-          ) as resolved_vin
-      FROM vin_splits_raw vsr
-      LEFT JOIN bronze.leaseend_db_public.cars c ON 
-          vsr.element_type = 'DEAL_ID'
-          AND TRY_CAST(vsr.raw_element AS INT) = c.deal_id
-          AND TRY_CAST(vsr.raw_element AS INT) IS NOT NULL
-          AND c.vin IS NOT NULL
-          AND LENGTH(c.vin) = 17
-          AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
-    ),
-    
-    vin_splits_valid AS (
-      SELECT
-          vswl.*,
-          -- integer cents for accuracy
-          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) AS total_cents,
-          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count AS base_split_cents,
-          pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) AS remainder_cents,
-          -- allocate ALL remainder cents to the FIRST VALID VIN only
-          CAST(ROUND(vswl.total_amount * 100) AS BIGINT) DIV vswl.element_count + 
-          CASE WHEN vswl.element_pos = 0 THEN pmod(CAST(ROUND(vswl.total_amount * 100) AS BIGINT), vswl.element_count) ELSE 0 END AS split_cents,
-          -- Add deduplication info: mark if this is the first occurrence of a duplicate VIN per sales line
-          ROW_NUMBER() OVER (PARTITION BY vswl.transaction_id, vswl.sales_line_id, vswl.resolved_vin ORDER BY vswl.element_pos) as vin_occurrence_rank
-      FROM vin_splits_with_lookup vswl
-      WHERE vswl.resolved_vin IS NOT NULL  -- Only include successfully resolved VINs
-    )
-    
-    SELECT
-        vsv.resolved_vin as vin,
-        vsv.account,
-        vsv.trandate,
-        YEAR(vsv.trandate) as transaction_year,
-        MONTH(vsv.trandate) as transaction_month,
-        vsv.transaction_type,
-        vsv.transaction_category,
-        vsv.transaction_subcategory,
-        -- Only include the first occurrence of each VIN to prevent double-counting duplicates per sales line
-        SUM(CASE WHEN vsv.vin_occurrence_rank = 1 THEN vsv.split_cents ELSE 0 END) / 100.0 as total_amount
-    FROM vin_splits_valid vsv
-    GROUP BY vsv.resolved_vin, vsv.account, vsv.trandate, YEAR(vsv.trandate), MONTH(vsv.trandate),
-             vsv.transaction_type, vsv.transaction_category, vsv.transaction_subcategory
-  ),
+  -- Multi-VIN CTEs removed - we now capture multi-VIN transactions as unallocated for GL reconciliation
+  -- (Removed complex multi_vin_expenses and multi_vin_revenue CTEs)
   
   -- VIN-only revenue - USE SALESINVOICED for revenue accounts
   -- Captures VINs that either have no deal_id OR have deal_id but don't match our VIN_MATCH criteria
@@ -737,9 +571,12 @@ USING (
     INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
     INNER JOIN account_mappings am ON so.account = am.account_id
     WHERE (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
-        AND t.custbody_leaseend_vinno IS NULL  -- ONLY transactions with NO VIN should be unallocated
+        AND (t.custbody_leaseend_vinno IS NULL 
+             OR LENGTH(t.custbody_leaseend_vinno) != 17  -- Include invalid VIN lengths
+             OR t.custbody_leaseend_vinno LIKE '% %')    -- Include VINs with spaces (not real VINs)
+        AND (t.custbody_leaseend_vinno IS NULL OR t.custbody_leaseend_vinno NOT LIKE '%,%')  -- EXCLUDE multi-VIN with NULL handling
         AND t.trandate IS NOT NULL
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include invoice & journal revenue entries
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')  -- Include GENJRNL for revenue like 4106 Reserve Bonus
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -758,7 +595,10 @@ USING (
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
     WHERE (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
-        AND t.custbody_leaseend_vinno IS NULL -- This was the missing condition
+        AND (t.custbody_leaseend_vinno IS NULL 
+             OR LENGTH(t.custbody_leaseend_vinno) != 17  -- Include invalid VIN lengths
+             OR t.custbody_leaseend_vinno LIKE '% %')    -- Include VINs with spaces (not real VINs)
+        AND (t.custbody_leaseend_vinno IS NULL OR t.custbody_leaseend_vinno NOT LIKE '%,%')  -- EXCLUDE multi-VIN with NULL handling
         AND t.trandate IS NOT NULL
         AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE')
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
@@ -768,124 +608,15 @@ USING (
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
     
-    
-    UNION ALL
-    
-            -- PARTIAL MULTI-VIN ALLOCATION: Include unresolvable portions of multi-VIN transactions
-        -- For transactions where some elements can be resolved (handled by multi-VIN split) 
-        -- and some cannot be resolved (should be allocated)
-        SELECT
-            transaction_period,
-            account,
-            SUM(unresolvable_amount) AS total_amount
-        FROM (
-            SELECT
-                DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
-                tl.expenseaccount as account,
-                t.id as transaction_id,
-                tl.foreignamount as total_amount,
-                SIZE(SPLIT(t.custbody_leaseend_vinno, ',')) as total_elements,
-                -- Count resolvable deal IDs
-                (
-                    SELECT COUNT(DISTINCT TRIM(element_split.element))
-                    FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
-                    INNER JOIN bronze.leaseend_db_public.cars c
-                        ON LENGTH(TRIM(element_split.element)) = 6
-                        AND TRIM(element_split.element) REGEXP '^[0-9]+$'
-                        AND TRY_CAST(TRIM(element_split.element) AS INT) = c.deal_id
-                        AND TRY_CAST(TRIM(element_split.element) AS INT) IS NOT NULL
-                        AND c.vin IS NOT NULL
-                        AND LENGTH(c.vin) = 17
-                        AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
-                ) +
-                -- Count resolvable VINs  
-                (
-                    SELECT COUNT(DISTINCT TRIM(element_split.element))
-                    FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
-                    WHERE LENGTH(TRIM(element_split.element)) = 17
-                    AND EXISTS (
-                        SELECT 1 FROM (
-                            SELECT DISTINCT UPPER(c.vin) as vin
-                            FROM bronze.leaseend_db_public.cars c
-                            WHERE c.vin IS NOT NULL 
-                                AND LENGTH(c.vin) = 17
-                                AND c.deal_id IS NOT NULL
-                                AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
-                            UNION
-                            SELECT UPPER(bd.vin) AS vin
-                            FROM silver.finance.bridge_vin_deal bd
-                            WHERE bd.is_active = TRUE
-                                AND bd.vin IS NOT NULL
-                                AND LENGTH(bd.vin) = 17
-                                AND bd.deal_id IS NOT NULL
-                        ) dv WHERE dv.vin = UPPER(TRIM(element_split.element))
-                    )
-                ) as resolvable_elements,
-                -- Calculate unresolvable amount
-                tl.foreignamount * (
-                    SIZE(SPLIT(t.custbody_leaseend_vinno, ',')) - 
-                    (
-                        -- Resolvable deal IDs count
-                        (
-                            SELECT COUNT(DISTINCT TRIM(element_split.element))
-                            FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
-                            INNER JOIN bronze.leaseend_db_public.cars c
-                                ON LENGTH(TRIM(element_split.element)) = 6
-                                AND TRIM(element_split.element) REGEXP '^[0-9]+$'
-                                AND TRY_CAST(TRIM(element_split.element) AS INT) = c.deal_id
-                                AND TRY_CAST(TRIM(element_split.element) AS INT) IS NOT NULL
-                                AND c.vin IS NOT NULL
-                                AND LENGTH(c.vin) = 17
-                                AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
-                        ) +
-                        -- Resolvable VINs count
-                        (
-                            SELECT COUNT(DISTINCT TRIM(element_split.element))
-                            FROM (SELECT explode(split(t.custbody_leaseend_vinno, ',')) as element) element_split
-                            WHERE LENGTH(TRIM(element_split.element)) = 17
-                            AND EXISTS (
-                                SELECT 1 FROM (
-                                    SELECT DISTINCT UPPER(c.vin) as vin
-                                    FROM bronze.leaseend_db_public.cars c
-                                    WHERE c.vin IS NOT NULL 
-                                        AND LENGTH(c.vin) = 17
-                                        AND c.deal_id IS NOT NULL
-                                        AND (c._fivetran_deleted = FALSE OR c._fivetran_deleted IS NULL)
-                                    UNION
-                                    SELECT UPPER(bd.vin) AS vin
-                                    FROM silver.finance.bridge_vin_deal bd
-                                    WHERE bd.is_active = TRUE
-                                        AND bd.vin IS NOT NULL
-                                        AND LENGTH(bd.vin) = 17
-                                        AND bd.deal_id IS NOT NULL
-                                ) dv WHERE dv.vin = UPPER(TRIM(element_split.element))
-                            )
-                        )
-                    )
-                ) / SIZE(SPLIT(t.custbody_leaseend_vinno, ',')) as unresolvable_amount
-            FROM bronze.ns.transactionline AS tl
-            INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
-            INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
-            WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions only
-                AND t.trandate IS NOT NULL
-                AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
-                AND am.transaction_subcategory != 'CHARGEBACK'
-                AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
-                AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
-                AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-                AND tl.foreignamount != 0
-                AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
-        ) partial_allocations
-        WHERE resolvable_elements > 0  -- Has some resolvable elements
-            AND total_elements > resolvable_elements  -- Has some unresolvable elements
-        GROUP BY transaction_period, account
+    -- Note: Removed complex partial multi-VIN allocation logic
+    -- Multi-VIN transactions are now captured as unallocated for GL reconciliation accuracy
   ),
   
   -- Combine VIN-matching and allocated amounts
   final_transactions_base AS (
     -- VIN-matching revenue transactions
     SELECT
-      CONCAT(t.custbody_le_deal_id, '_', so.account, '_REVENUE') as transaction_key,
+      CONCAT(t.custbody_le_deal_id, '_', so.account, '_', t.id, '_REVENUE') as transaction_key,
       CAST(t.custbody_le_deal_id AS STRING) as deal_key,
       CAST(so.account AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
@@ -924,6 +655,47 @@ USING (
 
         UNION ALL
 
+    -- VIN-matching expense transactions  
+    SELECT
+      CONCAT(t.custbody_le_deal_id, '_', tl.expenseaccount, '_', t.id, '_EXPENSE') as transaction_key,
+      CAST(t.custbody_le_deal_id AS STRING) as deal_key,
+      CAST(tl.expenseaccount AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(t.custbody_leaseend_vinno) as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND(tl.foreignamount * 100) AS BIGINT) as amount_cents,
+      CAST(tl.foreignamount AS DECIMAL(15,2)) as amount_dollars,
+      'VIN_MATCH' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionline' as _source_table,
+      CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
+    LEFT JOIN credit_memo_vins cmv ON UPPER(t.custbody_leaseend_vinno) = cmv.vin
+    WHERE LENGTH(t.custbody_leaseend_vinno) = 17
+      AND t.custbody_leaseend_vinno IS NOT NULL
+      AND t.custbody_leaseend_vinno NOT LIKE '%,%'
+      AND t.custbody_le_deal_id IS NOT NULL
+      AND t.custbody_le_deal_id != 0
+      AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Exclude SALESORD for 100% GL accuracy
+      AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
+      AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND tl.foreignamount != 0
+      AND am.is_direct_method_account = FALSE
+
+    UNION ALL
+
     -- Chargeback revenue transactions (from transactionline to match Income Statement source)
     -- NetSuite Income Statement uses transactionline data for chargeback accounts, not salesinvoiced
     SELECT
@@ -940,8 +712,8 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(tl.foreignamount * -1 * 100) AS BIGINT) as amount_cents,
-      CAST(tl.foreignamount * -1 AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(tl.foreignamount * 100) AS BIGINT) as amount_cents,
+      CAST(tl.foreignamount AS DECIMAL(15,2)) as amount_dollars,
       'CHARGEBACK' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
@@ -958,40 +730,61 @@ USING (
 
     UNION ALL
 
-    -- Account-specific direct handling (for problematic accounts with reconciliation issues)
-    -- This captures ALL transactions for specific accounts, both revenue and expense
+    -- DIRECT method transactions for specific problematic accounts
+    -- Properly deduplicated by business keys to prevent same transaction appearing multiple times
     SELECT
-      CONCAT('DIRECT_', COALESCE(tl.expenseaccount, so.account), '_', t.id, '_', COALESCE(tl.id, so.uniquekey)) as transaction_key,
-      CAST(COALESCE(t.custbody_le_deal_id, 0) AS STRING) as deal_key,
-      CAST(COALESCE(tl.expenseaccount, so.account) AS STRING) as account_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
-      UPPER(COALESCE(t.custbody_leaseend_vinno, '')) as vin,
-      MONTH(t.trandate) as month,
-      YEAR(t.trandate) as year,
-      am.transaction_type,
-      am.transaction_category,
-      am.transaction_subcategory,
-      CAST(ROUND(COALESCE(tl.foreignamount, so.amount) * 100) AS BIGINT) as amount_cents,
-      CAST(COALESCE(tl.foreignamount, so.amount) AS DECIMAL(15,2)) as amount_dollars,
+      CONCAT('DIRECT_', account_id, '_', deal_id, '_', DATE_FORMAT(trandate, 'yyyyMMdd'), '_', CAST(amount_dollars * 100 AS BIGINT)) as transaction_key,
+      CAST(deal_id AS STRING) as deal_key,
+      CAST(account_id AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(COALESCE(vin, '')) as vin,
+      MONTH(trandate) as month,
+      YEAR(trandate) as year,
+      transaction_type,
+      transaction_category,
+      transaction_subcategory,
+      CAST(ROUND(amount_dollars * 100) AS BIGINT) as amount_cents,
+      amount_dollars,
       'DIRECT' as allocation_method,  -- Direct capture for problematic accounts
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      CASE WHEN tl.id IS NOT NULL THEN 'bronze.ns.transactionline' ELSE 'bronze.ns.salesinvoiced' END as _source_table,
+      source_table as _source_table,
       FALSE AS has_credit_memo,  -- Credit memos handled separately
       CAST(0 AS INT) AS credit_memo_date_key,
       CAST(0 AS INT) AS credit_memo_time_key
-    FROM bronze.ns.transaction t
-    LEFT JOIN bronze.ns.transactionline tl ON t.id = tl.transaction 
-    LEFT JOIN bronze.ns.salesinvoiced so ON t.id = so.transaction 
-    INNER JOIN account_mappings am ON COALESCE(tl.expenseaccount, so.account) = am.account_id
-    WHERE (tl.id IS NOT NULL OR so.uniquekey IS NOT NULL)  -- Must have either expense or revenue line
-        AND am.is_direct_method_account = TRUE  -- Only process accounts handled by DIRECT method
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM', 'SALESORD')  -- Include all transaction types
-        AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
-        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-        AND COALESCE(tl.foreignamount, so.amount) != 0
+    FROM (
+      -- Deduplicate by business logic first - MODIFIED for 100% accuracy
+      SELECT
+        COALESCE(t.custbody_le_deal_id, 0) as deal_id,
+        COALESCE(tl.expenseaccount, so.account) as account_id,
+        t.trandate,
+        t.custbody_leaseend_vinno as vin,
+        am.transaction_type,
+        am.transaction_category,
+        am.transaction_subcategory,
+        COALESCE(tl.foreignamount, so.amount) as amount_dollars,
+        CASE WHEN tl.id IS NOT NULL THEN 'bronze.ns.transactionline' ELSE 'bronze.ns.salesinvoiced' END as source_table,
+                 ROW_NUMBER() OVER (
+           PARTITION BY 
+             t.id,  -- Use transaction ID as primary deduplication key for 100% accuracy
+             COALESCE(tl.id, so.uniquekey)  -- Include line ID to preserve separate line items
+           ORDER BY t.id, COALESCE(tl.id, so.uniquekey)
+         ) as rn
+      FROM bronze.ns.transaction t
+      LEFT JOIN bronze.ns.transactionline tl ON t.id = tl.transaction 
+      LEFT JOIN bronze.ns.salesinvoiced so ON t.id = so.transaction 
+      INNER JOIN account_mappings am ON COALESCE(tl.expenseaccount, so.account) = am.account_id
+      WHERE (tl.id IS NOT NULL OR so.uniquekey IS NOT NULL)  -- Must have either expense or revenue line
+          AND am.is_direct_method_account = TRUE  -- Only process direct method accounts
+          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM')  -- Exclude SALESORD for 100% GL accuracy
+          AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
+          AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+          AND COALESCE(tl.foreignamount, so.amount) != 0
+          AND t.trandate <= CURRENT_DATE()  -- Only include transactions up to today
+    ) deduped
+    WHERE rn = 1  -- Only take one record per business transaction
 
     UNION ALL
 
@@ -1030,7 +823,7 @@ USING (
 
     -- VIN-only expense transactions (VIN exists but NOT already captured by VIN_MATCH)
     SELECT
-      CONCAT(canonical_dv.deal_id, '_', voe.account, '_', voe.transaction_period, '_VIN_ONLY_EXPENSE') as transaction_key,
+      CONCAT(canonical_dv.deal_id, '_', voe.account, '_', DATE_FORMAT(voe.trandate, 'yyyyMMdd'), '_', CAST(ROUND(voe.total_amount * 100) AS BIGINT), '_VIN_ONLY_EXPENSE') as transaction_key,
       CAST(canonical_dv.deal_id AS STRING) as deal_key,
       CAST(voe.account AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(voe.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
@@ -1060,126 +853,82 @@ USING (
 
     UNION ALL
 
-    -- Multi-VIN split revenue transactions (linked to deals)
+    -- Multi-VIN revenue transactions as unallocated (for GL reconciliation accuracy)
+    -- Don't split multi-VIN transactions - capture them as NetSuite records them  
     SELECT
-      CONCAT(canonical_dv.deal_id, '_', mvr.account, '_', DATE_FORMAT(mvr.trandate, 'yyyyMMdd'), '_MULTI_VIN_REVENUE') as transaction_key,
-      CAST(canonical_dv.deal_id AS STRING) as deal_key,
-      CAST(mvr.account AS STRING) as account_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
-      mvr.vin,
-      mvr.transaction_month as month,
-      mvr.transaction_year as year,
-      mvr.transaction_type,
-      mvr.transaction_category,
-      mvr.transaction_subcategory,
-      CAST(ROUND(mvr.total_amount * 100) AS BIGINT) as amount_cents,
-      CAST(mvr.total_amount AS DECIMAL(15,2)) as amount_dollars,
-      'MULTI_VIN_SPLIT' as allocation_method,
+      CONCAT('MULTI_VIN_', t.id, '_', so.account, '_', so.uniquekey) as transaction_key,
+      NULL as deal_key,  -- Multi-VIN transactions can't be accurately allocated to specific deals
+      CAST(so.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      NULL as vin,  -- Multi-VIN can't be allocated to single VIN
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND(so.amount * 100) AS BIGINT) as amount_cents,
+      CAST(so.amount AS DECIMAL(15,2)) as amount_dollars,
+      'MULTI_VIN_UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.salesinvoiced' as _source_table,
-      CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
-    FROM multi_vin_revenue mvr
-    INNER JOIN (
-        SELECT vin, MAX(deal_id) as deal_id FROM deal_vins GROUP BY vin
-    ) canonical_dv ON mvr.vin = canonical_dv.vin
-    LEFT JOIN credit_memo_vins cmv ON mvr.vin = cmv.vin
-
-    UNION ALL
-
-    -- Multi-VIN split expense transactions (linked to deals)
-    SELECT
-      CONCAT(canonical_dv.deal_id, '_', mve.account, '_', DATE_FORMAT(mve.trandate, 'yyyyMMdd'), '_MULTI_VIN_EXPENSE') as transaction_key,
-      CAST(canonical_dv.deal_id AS STRING) as deal_key,
-      CAST(mve.account AS STRING) as account_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
-      mve.vin,
-      mve.transaction_month as month,
-      mve.transaction_year as year,
-      mve.transaction_type,
-      mve.transaction_category,
-      mve.transaction_subcategory,
-      CAST(ROUND(mve.total_amount * 100) AS BIGINT) as amount_cents,
-      CAST(mve.total_amount AS DECIMAL(15,2)) as amount_dollars,
-      'MULTI_VIN_SPLIT' as allocation_method,
-      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      'bronze.ns.transactionline' as _source_table,
-      CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
-      COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key
-    FROM multi_vin_expenses mve
-    INNER JOIN (
-        SELECT vin, MAX(deal_id) as deal_id FROM deal_vins GROUP BY vin
-    ) canonical_dv ON mve.vin = canonical_dv.vin
-    LEFT JOIN credit_memo_vins cmv ON mve.vin = cmv.vin
-
-    UNION ALL
-
-    -- Multi-VIN split revenue transactions that can't be linked to deals (orphaned VINs)
-    SELECT
-      CONCAT('MULTI_VIN_ORPHAN_', mvr.vin, '_', mvr.account, '_', DATE_FORMAT(mvr.trandate, 'yyyyMMdd'), '_REVENUE') as transaction_key,
-      NULL as deal_key,
-      CAST(mvr.account AS STRING) as account_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-      COALESCE(CAST(DATE_FORMAT(mvr.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
-      mvr.vin,
-      mvr.transaction_month as month,
-      mvr.transaction_year as year,
-      mvr.transaction_type,
-      mvr.transaction_category,
-      mvr.transaction_subcategory,
-      CAST(ROUND(mvr.total_amount * 100) AS BIGINT) as amount_cents,
-      CAST(mvr.total_amount AS DECIMAL(15,2)) as amount_dollars,
-      CASE WHEN mvr.total_amount > 0 THEN 'MULTI_VIN_ORPHAN_REFUND' ELSE 'MULTI_VIN_ORPHAN' END as allocation_method,
-      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      'bronze.ns.salesinvoiced' as _source_table,
-      FALSE AS has_credit_memo,
+      FALSE AS has_credit_memo,  -- Multi-VIN transactions rarely have credit memos
       CAST(NULL AS INT) AS credit_memo_date_key,
       CAST(NULL AS INT) AS credit_memo_time_key
-    FROM multi_vin_revenue mvr
-    LEFT JOIN deal_vins dv ON mvr.vin = dv.vin
-    WHERE dv.deal_id IS NULL
+    FROM bronze.ns.salesinvoiced so
+    INNER JOIN bronze.ns.transaction t ON so.transaction = t.id
+    INNER JOIN account_mappings am ON so.account = am.account_id
+    WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions only
+        AND am.transaction_type = 'REVENUE'
+        AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED')
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND so.amount != 0
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
 
     UNION ALL
 
-    -- Multi-VIN split expense transactions that can't be linked to deals (orphaned VINs)
-    -- Multi-VIN expense transactions that can't be linked to deals (orphaned VINs)
+    -- Multi-VIN expense transactions as unallocated (for GL reconciliation accuracy)
+    -- Don't split multi-VIN transactions - capture them as NetSuite records them
     SELECT
-      CONCAT('MULTI_VIN_ORPHAN_', mve.vin, '_', mve.account, '_', DATE_FORMAT(mve.trandate, 'yyyyMMdd'), '_EXPENSE') as transaction_key,
-      NULL as deal_key,
-      CAST(mve.account AS STRING) as account_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-      COALESCE(CAST(DATE_FORMAT(mve.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
-      mve.vin,
-      mve.transaction_month as month,
-      mve.transaction_year as year,
-      mve.transaction_type,
-      mve.transaction_category,
-      mve.transaction_subcategory,
-      CAST(ROUND(mve.total_amount * 100) AS BIGINT) as amount_cents,
-      CAST(mve.total_amount AS DECIMAL(15,2)) as amount_dollars,
-      CASE WHEN mve.total_amount > 0 THEN 'MULTI_VIN_ORPHAN_REFUND' ELSE 'MULTI_VIN_ORPHAN' END as allocation_method,
+      CONCAT('MULTI_VIN_', t.id, '_', tl.expenseaccount, '_', CAST(ROUND(tl.foreignamount * 100) AS BIGINT)) as transaction_key,
+      NULL as deal_key,  -- Multi-VIN transactions can't be accurately allocated to specific deals
+      CAST(tl.expenseaccount AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      NULL as vin,  -- Multi-VIN can't be allocated to single VIN
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND(tl.foreignamount * 100) AS BIGINT) as amount_cents,
+      CAST(tl.foreignamount AS DECIMAL(15,2)) as amount_dollars,
+      'MULTI_VIN_UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
-      FALSE AS has_credit_memo,
+      FALSE AS has_credit_memo,  -- Multi-VIN transactions rarely have credit memos
       CAST(NULL AS INT) AS credit_memo_date_key,
       CAST(NULL AS INT) AS credit_memo_time_key
-    FROM multi_vin_expenses mve
-    LEFT JOIN deal_vins dv ON mve.vin = dv.vin
-    WHERE dv.deal_id IS NULL
+    FROM bronze.ns.transactionline tl
+    INNER JOIN bronze.ns.transaction t ON tl.transaction = t.id
+    INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
+    WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions only
+        AND t.trandate IS NOT NULL
+        AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
+        AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND tl.foreignamount != 0
+        AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
 
     UNION ALL
+
+    -- Multi-VIN orphaned logic removed - now handled by MULTI_VIN_UNALLOCATED
 
     -- VIN-resolved missing revenue transactions (previously would have been allocated)
     SELECT
@@ -1213,7 +962,6 @@ USING (
     LEFT JOIN credit_memo_vins cmv ON vrm.vin = cmv.vin
 
     UNION ALL
-
     -- Allocated revenue transactions (missing VIN)
     SELECT
       CONCAT(rrwv.deal_id, '_', mvr.account, '_', rrwv.revenue_recognition_period, '_REVENUE_ALLOC') as transaction_key,
@@ -1440,8 +1188,20 @@ USING (
     ftwai.transaction_type,
     ftwai.transaction_category,
     ftwai.transaction_subcategory,
-    ftwai.amount_cents,
-    ftwai.amount_dollars,
+    CASE 
+        WHEN am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE') 
+        THEN ftwai.amount_cents  -- Keep expense accounts positive  
+        WHEN am.transaction_subcategory = 'CHARGEBACK'  -- Flip chargeback accounts to negative
+        THEN ftwai.amount_cents * -1
+        ELSE ftwai.amount_cents
+    END as amount_cents,
+    CASE 
+        WHEN am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE') 
+        THEN ftwai.amount_dollars -- Keep expense accounts positive
+        WHEN am.transaction_subcategory = 'CHARGEBACK'  -- Flip chargeback accounts to negative
+        THEN ftwai.amount_dollars * -1
+        ELSE ftwai.amount_dollars
+    END as amount_dollars,
     ftwai.allocation_method,
     ftwai.allocation_factor,
     -- Driver count logic: TRUE for qualifying fee transactions in deals that count toward driver metrics
@@ -1451,6 +1211,7 @@ USING (
   FROM final_transactions_with_account_info ftwai
   LEFT JOIN driver_count_transactions dct
       ON ftwai.transaction_key_unique = dct.transaction_key_unique
+  LEFT JOIN account_mappings am ON ftwai.account_key = CAST(am.account_id AS STRING)
 
 ) AS source
 ON target.transaction_key = source.transaction_key
