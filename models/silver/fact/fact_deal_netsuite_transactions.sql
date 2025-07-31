@@ -300,7 +300,7 @@ USING (
           WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 THEN 'REVENUE'                    -- 4000 series = Revenue
           WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5000 AND 5999 THEN 'COST_OF_REVENUE'           -- 5000 series = Cost of Revenue
           WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 6000 AND 7999 THEN 'EXPENSE'                   -- 6000-7000 series = Operating Expenses
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 8000 AND 8999 THEN 'OTHER_EXPENSE'             -- 8000 series = Other Expenses (taxes)
+          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 8000 AND 8999 THEN 'EXPENSE'                   -- 8000 series = Tax Expenses (treat as regular expenses)
           WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 9000 AND 9999 THEN 
             CASE 
               WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'OTHER_INCOME'  -- 9000 series income
@@ -392,7 +392,7 @@ USING (
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND t.custbody_le_deal_id IS NOT NULL
         AND t.custbody_le_deal_id != 0
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include invoice & journal revenue entries
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -418,7 +418,7 @@ USING (
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND t.custbody_le_deal_id IS NOT NULL
         AND t.custbody_le_deal_id != 0
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Exclude SALESORD for 100% GL accuracy
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP')  -- Exclude SALESORD for 100% GL accuracy
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -451,7 +451,7 @@ USING (
         -- VIN_ONLY: Only single-VIN expense transactions WITHOUT deal_ids
         AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- VIN_ONLY: Only transactions without deal_ids
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
@@ -482,7 +482,7 @@ USING (
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- VIN_ONLY: Only transactions without deal_ids
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include invoice & journal revenue entries
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')  -- Include invoice & journal revenue entries
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND t.trandate IS NOT NULL
@@ -603,7 +603,7 @@ USING (
              OR t.custbody_leaseend_vinno LIKE '% %')    -- Include VINs with spaces (not real VINs)
         AND (t.custbody_leaseend_vinno IS NULL OR t.custbody_leaseend_vinno NOT LIKE '%,%')  -- EXCLUDE multi-VIN with NULL handling
         AND t.trandate IS NOT NULL
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include GENJRNL for revenue like 4106 Reserve Bonus
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')  -- Include GENJRNL for revenue like 4106 Reserve Bonus
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -629,7 +629,7 @@ USING (
         AND (t.custbody_leaseend_vinno IS NULL OR t.custbody_leaseend_vinno NOT LIKE '%,%')  -- EXCLUDE multi-VIN with NULL handling
         AND t.trandate IS NOT NULL
         AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Standard approval filter for consistency
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
@@ -675,7 +675,7 @@ USING (
       AND t.custbody_leaseend_vinno NOT LIKE '%,%'
       AND t.custbody_le_deal_id IS NOT NULL
       AND t.custbody_le_deal_id != 0
-      AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')  -- Include invoice & journal revenue entries
+      AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')  -- Include invoice & journal revenue entries
       AND am.transaction_type = 'REVENUE'
       AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -718,7 +718,7 @@ USING (
       AND t.custbody_leaseend_vinno NOT LIKE '%,%'
       AND t.custbody_le_deal_id IS NOT NULL
       AND t.custbody_le_deal_id != 0
-      AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Exclude SALESORD for 100% GL accuracy
+      AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP')  -- Exclude SALESORD for 100% GL accuracy
       AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
       AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
@@ -812,7 +812,7 @@ USING (
       INNER JOIN account_mappings am ON COALESCE(tl.expenseaccount, so.account) = am.account_id
       WHERE (tl.id IS NOT NULL OR so.uniquekey IS NOT NULL)  -- Must have either expense or revenue line
           AND am.is_direct_method_account = TRUE  -- Only process direct method accounts
-          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM')  -- Exclude SALESORD for 100% GL accuracy
+          AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP', 'INV WKST')  -- Exclude SALESORD for 100% GL accuracy
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND (t.posting = 'T' OR t.posting IS NULL)  -- FIXED: Only include posted transactions to match NetSuite GL accuracy
@@ -918,7 +918,7 @@ USING (
     WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions only
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
@@ -957,7 +957,7 @@ USING (
     WHERE t.custbody_leaseend_vinno LIKE '%,%'  -- Multi-VIN transactions only
         AND t.trandate IS NOT NULL
         AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP')
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
@@ -1063,7 +1063,7 @@ USING (
     WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
         AND t.custbody_le_deal_id IS NOT NULL
         AND am.transaction_type IN ('EXPENSE', 'COST_OF_REVENUE', 'OTHER_EXPENSE')
-        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK')  -- Include CHK for complete expense capture
+        AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP')  -- Include CHK for complete expense capture
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
@@ -1102,7 +1102,7 @@ USING (
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Single VIN only
         AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- No deal ID
-        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC')
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'
         AND t.trandate IS NOT NULL
