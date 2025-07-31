@@ -161,6 +161,7 @@ USING (
       ('7141'), -- BANK FEES (account 450)
       ('7160'), -- TRAVEL & ENTERTAINMENT - ADDED to capture individual transactions instead of allocation
       ('7170'), -- RENT & LEASE - ADDED to capture individual transactions instead of allocation  
+      ('7174'), -- VEHICLE MAINTENANCE - ADDED to capture individual transactions instead of allocation
       ('7180')  -- INTERNET & TELEPHONE - ADDED to fix reconciliation issues
       -- REMOVED: ('4106') -- REV - RESERVE BONUS - REMOVED: Revenue accounts shouldn't use DIRECT method
       -- REMOVED: ('4190')  -- REBATES (account 563) - should use normal revenue allocation methods
