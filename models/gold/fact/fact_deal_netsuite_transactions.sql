@@ -1,11 +1,11 @@
 -- models/gold/fact/fact_deal_netsuite_transactions.sql
 -- Gold layer NetSuite transactions fact table with enhanced business logic
 
--- Drop and recreate table to ensure correct schema
-DROP TABLE IF EXISTS gold.finance.fact_deal_netsuite_transactions;
+-- Drop and recreate base table to ensure correct schema
+DROP TABLE IF EXISTS gold.finance.fact_deal_netsuite_transactions_base;
 
--- 1. Create the enhanced gold fact table
-CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite_transactions (
+-- 1. Create the enhanced gold fact base table (all transactions)
+CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite_transactions_base (
   transaction_key STRING NOT NULL,
   deal_key STRING, -- Nullable to allow non-deal transactions from income statement
   account_key STRING NOT NULL, -- Foreign key to gold.finance.dim_account
@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite_transactions (
   netsuite_posting_time_key BIGINT,
   revenue_recognition_date_key INT,
   revenue_recognition_time_key INT,
+  netsuite_posting_status STRING, -- 'POSTED', 'PENDING', 'UNPOSTED' for debugging
   
 
   -- Credit Memo Flags
@@ -80,8 +81,8 @@ TBLPROPERTIES (
     'delta.autoOptimize.autoCompact' = 'true'
 );
 
--- 2. Merge incremental changes from silver layer
-MERGE INTO gold.finance.fact_deal_netsuite_transactions AS target
+-- 2. Merge incremental changes from silver layer into base table
+MERGE INTO gold.finance.fact_deal_netsuite_transactions_base AS target
 USING (
   WITH fiscal_calendar AS (
     -- Define fiscal year logic (assuming fiscal year starts in January)
@@ -98,7 +99,7 @@ USING (
       year as fiscal_year
     FROM (
       SELECT DISTINCT month, year 
-      FROM silver.finance.fact_deal_netsuite_transactions
+      FROM silver.finance.fact_deal_netsuite_transactions_base
     )
   ),
   
@@ -111,6 +112,7 @@ USING (
       sf.netsuite_posting_time_key,
       sf.revenue_recognition_date_key,
       sf.revenue_recognition_time_key,
+      sf.netsuite_posting_status,
       sf.vin,
       sf.month,
       sf.year,
@@ -188,7 +190,7 @@ USING (
       sf.credit_memo_date_key,
       sf.credit_memo_time_key,
       sf.is_driver_count
-    FROM silver.finance.fact_deal_netsuite_transactions sf
+    FROM silver.finance.fact_deal_netsuite_transactions_base sf
     INNER JOIN fiscal_calendar fc ON sf.month = fc.month AND sf.year = fc.year
     -- Ensure account exists in gold dimension (left join to allow NULL deal_key transactions)
     INNER JOIN gold.finance.dim_account da ON sf.account_key = da.account_key
@@ -217,6 +219,7 @@ WHEN MATCHED THEN
     target.netsuite_posting_time_key = source.netsuite_posting_time_key,
     target.revenue_recognition_date_key = source.revenue_recognition_date_key,
     target.revenue_recognition_time_key = source.revenue_recognition_time_key,
+    target.netsuite_posting_status = source.netsuite_posting_status,
     target.vin = source.vin,
     target.month = source.month,
     target.year = source.year,
@@ -260,7 +263,7 @@ WHEN MATCHED THEN
 WHEN NOT MATCHED THEN
   INSERT (
     transaction_key, deal_key, account_key, netsuite_posting_date_key, netsuite_posting_time_key,
-    revenue_recognition_date_key, revenue_recognition_time_key, vin, month, year,
+    revenue_recognition_date_key, revenue_recognition_time_key, netsuite_posting_status, vin, month, year,
     fiscal_month, fiscal_quarter, fiscal_year, transaction_type, transaction_category, transaction_subcategory,
     transaction_group, revenue_metric_group, cost_metric_group, expense_metric_group, other_metric_group,
     is_total_revenue, is_cost_of_revenue, is_gross_profit, is_operating_expense, is_net_ordinary_revenue, is_other_income_expense, is_net_income,
@@ -271,7 +274,7 @@ WHEN NOT MATCHED THEN
   )
   VALUES (
     source.transaction_key, source.deal_key, source.account_key, source.netsuite_posting_date_key, source.netsuite_posting_time_key,
-    source.revenue_recognition_date_key, source.revenue_recognition_time_key, source.vin, source.month, source.year,
+    source.revenue_recognition_date_key, source.revenue_recognition_time_key, source.netsuite_posting_status, source.vin, source.month, source.year,
     source.fiscal_month, source.fiscal_quarter, source.fiscal_year, source.transaction_type, source.transaction_category, source.transaction_subcategory,
     source.transaction_group, source.revenue_metric_group, source.cost_metric_group, source.expense_metric_group, source.other_metric_group,
     source.is_total_revenue, source.is_cost_of_revenue, source.is_gross_profit, source.is_operating_expense, source.is_net_ordinary_revenue, source.is_other_income_expense, source.is_net_income,
@@ -283,7 +286,16 @@ WHEN NOT MATCHED THEN
 
 -- 3. Create optimized indexes and statistics
 -- Note: Z-ORDER cannot include partition columns (fiscal_year, fiscal_quarter)
---OPTIMIZE gold.finance.fact_deal_netsuite_transactions ZORDER BY (deal_key, account_key, transaction_type, vin);
+--OPTIMIZE gold.finance.fact_deal_netsuite_transactions_base ZORDER BY (deal_key, account_key, transaction_type, vin);
 
 -- 4. Update table statistics for query optimization
---ANALYZE TABLE gold.finance.fact_deal_netsuite_transactions COMPUTE STATISTICS; 
+--ANALYZE TABLE gold.finance.fact_deal_netsuite_transactions_base COMPUTE STATISTICS;
+
+-- 5. Create the Gold view for posted transactions only (backward compatibility)
+-- This must come AFTER the MERGE operation to ensure the base table has data
+DROP VIEW IF EXISTS gold.finance.fact_deal_netsuite_transactions;
+
+CREATE VIEW gold.finance.fact_deal_netsuite_transactions AS
+SELECT *
+FROM gold.finance.fact_deal_netsuite_transactions_base
+WHERE netsuite_posting_status = 'POSTED'; 

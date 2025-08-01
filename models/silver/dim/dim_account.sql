@@ -67,6 +67,7 @@ USING (
       ('4105', 'REVENUE', 'RESERVE', 'BASE'),
       ('4106', 'REVENUE', 'RESERVE', 'BONUS'),
       ('4107', 'REVENUE', 'RESERVE', 'CHARGEBACK'),
+      ('4130C', 'REVENUE', 'DOC_FEES', 'CHARGEBACK'),
 
       -- 4110 - REV - VSC  
       ('4110', 'REVENUE', 'VSC', 'BASE'),
