@@ -1238,7 +1238,11 @@ USING (
         SELECT 1 FROM bronze.ns.salesinvoiced so2 
         WHERE so2.transaction = t.id AND so2.account = tal.account
       )
-      -- Keep single NOT EXISTS for transactionline; remove duplicate predicate
+      -- Avoid double-count: skip if transactionline already has this transaction/account (for chargebacks, etc.)
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.transactionline tl2 
+        WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
+      )
 
     UNION ALL
 
