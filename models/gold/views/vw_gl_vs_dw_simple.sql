@@ -89,13 +89,13 @@ WITH direct_method_accounts AS (
 ),
 dw_totals AS (
     SELECT
-        da.account_number,
-        MAX(da.account_name) AS account_name,
-        f.year,
-        f.month,
+        COALESCE(da.account_number, a.acctnumber) AS account_number,
+        MAX(COALESCE(da.account_name, a.fullname)) AS account_name,
+        dd.year,
+        dd.month,
         -- Negate revenue accounts (4000-4999) to match NetSuite's sign convention
         SUM(CASE 
-            WHEN CAST(REGEXP_EXTRACT(da.account_number, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+            WHEN CAST(REGEXP_EXTRACT(COALESCE(da.account_number, a.acctnumber), '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
             THEN -f.amount_dollars  -- Negate revenue to match NetSuite
             ELSE f.amount_dollars  -- Keep other accounts as is
         END) AS dw_total,
@@ -103,10 +103,12 @@ dw_totals AS (
         -- Add flag to identify DIRECT method accounts
         MAX(CASE WHEN dma.account_number IS NOT NULL THEN TRUE ELSE FALSE END) as is_direct_method_account
     FROM gold.finance.fact_deal_netsuite_transactions f
-    JOIN gold.finance.dim_account da ON f.account_key = da.account_key
-    LEFT JOIN direct_method_accounts dma ON da.account_number = dma.account_number
-    WHERE CAST(REGEXP_EXTRACT(da.account_number, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 8999
-    GROUP BY da.account_number, f.year, f.month
+    LEFT JOIN gold.finance.dim_account da ON f.account_key = da.account_key
+    LEFT JOIN bronze.ns.account a ON CAST(f.account_key AS BIGINT) = a.id
+    LEFT JOIN gold.finance.dim_date dd ON f.netsuite_posting_date_key = dd.date_key
+    LEFT JOIN direct_method_accounts dma ON COALESCE(da.account_number, a.acctnumber) = dma.account_number
+    WHERE CAST(REGEXP_EXTRACT(COALESCE(da.account_number, a.acctnumber), '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 8999
+    GROUP BY COALESCE(da.account_number, a.acctnumber), dd.year, dd.month
 ),
 ns_posted AS (
     SELECT
@@ -131,48 +133,22 @@ ns_posted AS (
 ),
 -- For DIRECT method accounts, get total NetSuite amounts (posted + unposted) for comparison
 ns_total_direct AS (
-    -- Expense accounts from transactionline (for DIRECT method accounts)
+    -- Use posted GL (transactionaccountingline) for DIRECT method accounts to match GL exactly
     SELECT
         a.acctnumber AS account_number,
         MAX(a.fullname) AS account_name,
         YEAR(t.trandate) AS year,
         MONTH(t.trandate) AS month,
-        SUM(tl.foreignamount) AS ns_total_amount,  -- Keep NetSuite's original sign
+        SUM(tal.amount) AS ns_total_amount,  -- Keep NetSuite's original sign
         COUNT(*) as ns_total_transaction_count
-    FROM bronze.ns.transactionline tl
-    JOIN bronze.ns.transaction t ON tl.transaction = t.id
-    JOIN bronze.ns.account a ON tl.expenseaccount = a.id
+    FROM bronze.ns.transactionaccountingline tal
+    JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    JOIN bronze.ns.account a ON tal.account = a.id
     JOIN direct_method_accounts dma ON a.acctnumber = dma.account_number
-    WHERE t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP', 'INV WKST')
-      AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
+    WHERE tal.posting = 'T'  -- Only posted GL entries
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-      AND (tl._fivetran_deleted = FALSE OR tl._fivetran_deleted IS NULL)
-      AND (t.posting = 'T' OR t.posting IS NULL)  -- Include both posted and unposted for DIRECT method comparison
-      AND tl.foreignamount != 0
-      AND t.trandate <= CURRENT_DATE()
-    GROUP BY a.acctnumber, YEAR(t.trandate), MONTH(t.trandate)
-    
-    UNION ALL
-    
-    -- Revenue accounts from salesinvoiced (for DIRECT method accounts - if any)
-    SELECT
-        a.acctnumber AS account_number,
-        MAX(a.fullname) AS account_name,
-        YEAR(t.trandate) AS year,
-        MONTH(t.trandate) AS month,
-        SUM(so.amount) AS ns_total_amount,  -- Keep NetSuite's original sign
-        COUNT(*) as ns_total_transaction_count
-    FROM bronze.ns.salesinvoiced so
-    JOIN bronze.ns.transaction t ON so.transaction = t.id
-    JOIN bronze.ns.account a ON so.account = a.id
-    JOIN direct_method_accounts dma ON a.acctnumber = dma.account_number
-    WHERE t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP', 'INV WKST')
-      AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
-      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-      AND (so._fivetran_deleted = FALSE OR so._fivetran_deleted IS NULL)
-      AND (t.posting = 'T' OR t.posting IS NULL)  -- Include both posted and unposted for DIRECT method comparison
-      AND so.amount != 0
-      AND t.trandate <= CURRENT_DATE()
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
     GROUP BY a.acctnumber, YEAR(t.trandate), MONTH(t.trandate)
 ),
 -- First calculate aggregated values

@@ -8,12 +8,12 @@ WITH dw AS (
     SELECT account_number, account_name, year, month, SUM(total) AS dw_total
     FROM (
         -- P&L facts
-        SELECT da.account_number, da.account_name, dt.year AS year, dt.month AS month,
-               SUM(f.amount_dollars) AS total
-        FROM silver.finance.fact_deal_netsuite_transactions f
-        JOIN silver.finance.dim_account da ON f.account_key = da.account_key
-        JOIN silver.finance.dim_date    dt ON f.revenue_recognition_date_key = dt.date_key
-        GROUP BY da.account_number, da.account_name, dt.year, dt.month
+         SELECT da.account_number, da.account_name, dd.year AS year, dd.month AS month,
+                SUM(f.amount_dollars) AS total
+         FROM gold.finance.fact_deal_netsuite_transactions f
+         JOIN silver.finance.dim_account da ON f.account_key = da.account_key
+         JOIN silver.finance.dim_date    dd ON f.netsuite_posting_date_key = dd.date_key
+         GROUP BY da.account_number, da.account_name, dd.year, dd.month
         UNION ALL
         -- Balance-sheet facts
         SELECT da.account_number, da.account_name, f.year, f.month,

@@ -1,7 +1,8 @@
 -- models/gold/fact/fact_deal_netsuite_transactions.sql
 -- Gold layer NetSuite transactions fact table with enhanced business logic
-
 -- Drop and recreate base table to ensure correct schema
+
+
 DROP TABLE IF EXISTS gold.finance.fact_deal_netsuite_transactions_base;
 
 -- 1. Create the enhanced gold fact base table (all transactions)
@@ -14,7 +15,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite_transactions_base (
   revenue_recognition_date_key INT,
   revenue_recognition_time_key INT,
   netsuite_posting_status STRING, -- 'POSTED', 'PENDING', 'UNPOSTED' for debugging
-  
+
 
   -- Credit Memo Flags
   has_credit_memo BOOLEAN,
@@ -25,9 +26,6 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite_transactions_base (
   vin STRING,
   month INT,
   year INT,
-  fiscal_month INT,
-  fiscal_quarter INT,
-  fiscal_year INT,
   
   -- Enhanced transaction details
   transaction_type STRING,
@@ -75,7 +73,7 @@ CREATE TABLE IF NOT EXISTS gold.finance.fact_deal_netsuite_transactions_base (
   _gold_processed_timestamp TIMESTAMP
 )
 USING DELTA
-PARTITIONED BY (fiscal_year, fiscal_quarter)
+PARTITIONED BY (year)
 TBLPROPERTIES (
     'delta.autoOptimize.optimizeWrite' = 'true',
     'delta.autoOptimize.autoCompact' = 'true'
@@ -84,25 +82,7 @@ TBLPROPERTIES (
 -- 2. Merge incremental changes from silver layer into base table
 MERGE INTO gold.finance.fact_deal_netsuite_transactions_base AS target
 USING (
-  WITH fiscal_calendar AS (
-    -- Define fiscal year logic (assuming fiscal year starts in January)
-    SELECT
-      month,
-      year,
-      month as fiscal_month,
-      CASE 
-        WHEN month <= 3 THEN 1
-        WHEN month <= 6 THEN 2
-        WHEN month <= 9 THEN 3
-        ELSE 4
-      END as fiscal_quarter,
-      year as fiscal_year
-    FROM (
-      SELECT DISTINCT month, year 
-      FROM silver.finance.fact_deal_netsuite_transactions_base
-    )
-  ),
-  
+  WITH 
   enhanced_transactions AS (
     SELECT
       sf.transaction_key,
@@ -114,11 +94,8 @@ USING (
       sf.revenue_recognition_time_key,
       sf.netsuite_posting_status,
       sf.vin,
-      sf.month,
-      sf.year,
-      fc.fiscal_month,
-      fc.fiscal_quarter,
-      fc.fiscal_year,
+       sf.month,
+       sf.year,
       
       -- Enhanced transaction details
       sf.transaction_type,
@@ -191,9 +168,8 @@ USING (
       sf.credit_memo_time_key,
       sf.is_driver_count
     FROM silver.finance.fact_deal_netsuite_transactions_base sf
-    INNER JOIN fiscal_calendar fc ON sf.month = fc.month AND sf.year = fc.year
-    -- Ensure account exists in gold dimension (left join to allow NULL deal_key transactions)
-    INNER JOIN gold.finance.dim_account da ON sf.account_key = da.account_key
+    -- Do not filter facts by dimension availability; facts must be independent of dims
+    LEFT JOIN gold.finance.dim_account da ON sf.account_key = da.account_key
   ),
   
   -- Note: Expenses already handled in silver layer with correct signs
@@ -221,11 +197,8 @@ WHEN MATCHED THEN
     target.revenue_recognition_time_key = source.revenue_recognition_time_key,
     target.netsuite_posting_status = source.netsuite_posting_status,
     target.vin = source.vin,
-    target.month = source.month,
-    target.year = source.year,
-    target.fiscal_month = source.fiscal_month,
-    target.fiscal_quarter = source.fiscal_quarter,
-    target.fiscal_year = source.fiscal_year,
+     target.month = source.month,
+     target.year = source.year,
     target.transaction_type = source.transaction_type,
     target.transaction_category = source.transaction_category,
     target.transaction_subcategory = source.transaction_subcategory,
@@ -264,7 +237,7 @@ WHEN NOT MATCHED THEN
   INSERT (
     transaction_key, deal_key, account_key, netsuite_posting_date_key, netsuite_posting_time_key,
     revenue_recognition_date_key, revenue_recognition_time_key, netsuite_posting_status, vin, month, year,
-    fiscal_month, fiscal_quarter, fiscal_year, transaction_type, transaction_category, transaction_subcategory,
+    transaction_type, transaction_category, transaction_subcategory,
     transaction_group, revenue_metric_group, cost_metric_group, expense_metric_group, other_metric_group,
     is_total_revenue, is_cost_of_revenue, is_gross_profit, is_operating_expense, is_net_ordinary_revenue, is_other_income_expense, is_net_income,
     is_revenue, is_expense, is_other_income, is_other_expense,
@@ -273,15 +246,15 @@ WHEN NOT MATCHED THEN
     _source_table, _load_timestamp, has_credit_memo, credit_memo_date_key, credit_memo_time_key, is_driver_count, _gold_processed_timestamp
   )
   VALUES (
-    source.transaction_key, source.deal_key, source.account_key, source.netsuite_posting_date_key, source.netsuite_posting_time_key,
-    source.revenue_recognition_date_key, source.revenue_recognition_time_key, source.netsuite_posting_status, source.vin, source.month, source.year,
-    source.fiscal_month, source.fiscal_quarter, source.fiscal_year, source.transaction_type, source.transaction_category, source.transaction_subcategory,
+     source.transaction_key, source.deal_key, source.account_key, source.netsuite_posting_date_key, source.netsuite_posting_time_key,
+     source.revenue_recognition_date_key, source.revenue_recognition_time_key, source.netsuite_posting_status, source.vin, source.month, source.year,
+     source.transaction_type, source.transaction_category, source.transaction_subcategory,
     source.transaction_group, source.revenue_metric_group, source.cost_metric_group, source.expense_metric_group, source.other_metric_group,
     source.is_total_revenue, source.is_cost_of_revenue, source.is_gross_profit, source.is_operating_expense, source.is_net_ordinary_revenue, source.is_other_income_expense, source.is_net_income,
     source.is_revenue, source.is_expense, source.is_other_income, source.is_other_expense,
     source.amount_cents, source.amount_dollars, source.amount_dollars_abs, source.allocation_method, source.allocation_factor,
-    source.data_quality_score, source.profit_contribution,
-    source._source_table, source._load_timestamp, source.has_credit_memo, source.credit_memo_date_key, source.credit_memo_time_key, source.is_driver_count, source._gold_processed_timestamp
+     source.data_quality_score, source.profit_contribution,
+     source._source_table, source._load_timestamp, source.has_credit_memo, source.credit_memo_date_key, source.credit_memo_time_key, source.is_driver_count, source._gold_processed_timestamp
   );
 
 -- 3. Create optimized indexes and statistics

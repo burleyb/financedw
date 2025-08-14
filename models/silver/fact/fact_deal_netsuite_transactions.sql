@@ -2,7 +2,6 @@
 -- Normalized NetSuite fact table with account foreign keys for flexible pivoting
 -- BASE TABLE: Contains both posted and unposted transactions
 
-
 -- Drop and recreate table to ensure correct schema
 
 DROP VIEW IF EXISTS silver.finance.fact_deal_netsuite_transactions;
@@ -413,6 +412,7 @@ USING (
     FROM bronze.ns.salesinvoiced AS so
     INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
     INNER JOIN account_mappings am ON so.account = am.account_id
+    INNER JOIN bronze.ns.account a ON so.account = a.id
     WHERE LENGTH(t.custbody_leaseend_vinno) = 17
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
@@ -425,6 +425,15 @@ USING (
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+        -- Remove GL EXISTS requirement for base revenue accounts; keep it for others
+        AND (
+          a.acctnumber IN ('4105','4110','4120','4130','4141','4110A','4120A')
+          OR EXISTS (
+            SELECT 1 FROM bronze.ns.transactionaccountingline tal
+            WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
+              AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+          )
+        )
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account
   ),
 
@@ -435,7 +444,7 @@ USING (
     SELECT
         UPPER(t.custbody_leaseend_vinno) as vin,
         tl.expenseaccount as account,
-        SUM(tl.foreignamount) AS total_amount
+        SUM(tl.netamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -449,7 +458,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND tl.foreignamount != 0
+        AND tl.netamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount
   ),
@@ -458,7 +467,7 @@ USING (
   -- Captures VINs that either have no deal_id OR have deal_id but don't match our VIN_MATCH criteria
   -- Also exclude accounts 5110, 5120, 5110A, 5120A from VIN-only matching
   -- Only match EXACT 17-character VINs (no commas or multiple VINs)
-  -- SIGN CORRECTION: Negate foreignamount to match income statement format (expenses should be negative)
+  -- SIGN CORRECTION: Negate amount to match income statement format (expenses should be negative)
   vin_only_expenses AS (
     SELECT
         UPPER(t.custbody_leaseend_vinno) as vin,
@@ -467,7 +476,7 @@ USING (
         YEAR(t.trandate) as transaction_year,
         MONTH(t.trandate) as transaction_month,
         t.trandate,
-        SUM(tl.foreignamount) AS total_amount
+        SUM(tl.netamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -481,7 +490,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND tl.foreignamount != 0
+        AND tl.netamount != 0
         AND t.trandate IS NOT NULL
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY UPPER(t.custbody_leaseend_vinno), tl.expenseaccount, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate
@@ -524,6 +533,15 @@ USING (
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
         AND a.acctnumber NOT IN ('4110B', '4120B')  -- Exclude volume bonus accounts to prevent double-counting with NON_VIN_VOLUME_BONUS
+        -- Remove GL EXISTS requirement for base revenue accounts; keep it for others
+        AND (
+          a.acctnumber IN ('4105','4110','4120','4130','4141','4110A','4120A')
+          OR EXISTS (
+            SELECT 1 FROM bronze.ns.transactionaccountingline tal
+            WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
+              AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+          )
+        )
     GROUP BY UPPER(t.custbody_leaseend_vinno), so.account, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate)
   ),
   
@@ -555,6 +573,7 @@ USING (
       INNER JOIN bronze.leaseend_db_public.deals d ON t.custbody_le_deal_id = d.id
       INNER JOIN revenue_recognition_with_vins rrwv ON d.id = rrwv.deal_id
       INNER JOIN account_mappings am ON so.account = am.account_id
+      INNER JOIN bronze.ns.account a ON so.account = a.id
       LEFT JOIN deal_vins dv ON t.custbody_le_deal_id = dv.deal_id
       WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
           AND t.custbody_le_deal_id IS NOT NULL
@@ -562,6 +581,15 @@ USING (
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
           AND so.amount != 0
+          -- Remove GL EXISTS requirement for base revenue accounts; keep it for others
+          AND (
+            a.acctnumber IN ('4105','4110','4120','4130','4141','4110A','4120A')
+            OR EXISTS (
+              SELECT 1 FROM bronze.ns.transactionaccountingline tal
+              WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
+                AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+            )
+          )
     )
     -- Only include transactions that still can't be resolved after VIN lookup
     -- AND exclude transactions already captured by VIN-matching to prevent double-counting
@@ -614,6 +642,7 @@ USING (
       INNER JOIN bronze.leaseend_db_public.deals d ON t.custbody_le_deal_id = d.id
       INNER JOIN revenue_recognition_with_vins rrwv ON d.id = rrwv.deal_id
       INNER JOIN account_mappings am ON so.account = am.account_id
+      INNER JOIN bronze.ns.account a ON so.account = a.id
       LEFT JOIN deal_vins dv ON t.custbody_le_deal_id = dv.deal_id
       WHERE (LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno IS NULL)
           AND t.custbody_le_deal_id IS NOT NULL
@@ -621,6 +650,15 @@ USING (
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
           AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
           AND so.amount != 0
+          -- Remove GL EXISTS requirement for base revenue accounts; keep it for others
+          AND (
+            a.acctnumber IN ('4105','4110','4120','4130','4141','4110A','4120A')
+            OR EXISTS (
+              SELECT 1 FROM bronze.ns.transactionaccountingline tal
+              WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
+                AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+            )
+          )
     )
     -- Include transactions that were resolved via VIN lookup
     SELECT
@@ -647,10 +685,14 @@ USING (
     INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
     INNER JOIN account_mappings am ON so.account = am.account_id
     INNER JOIN bronze.ns.account a ON so.account = a.id  -- Add account table for exclusion logic
-    WHERE (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
-        AND (t.custbody_leaseend_vinno IS NULL 
-             OR LENGTH(t.custbody_leaseend_vinno) != 17  -- Include invalid VIN lengths
-             OR t.custbody_leaseend_vinno LIKE '% %')    -- Include VINs with spaces (not real VINs)
+    WHERE (((t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
+             AND (t.custbody_leaseend_vinno IS NULL 
+                  OR LENGTH(t.custbody_leaseend_vinno) != 17  -- Include invalid VIN lengths
+                  OR t.custbody_leaseend_vinno LIKE '% %'))   -- Include VINs with spaces (not real VINs)
+           OR (t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+               AND (t.custbody_leaseend_vinno IS NULL 
+                    OR LENGTH(t.custbody_leaseend_vinno) != 17  -- Include invalid VIN lengths
+                    OR t.custbody_leaseend_vinno LIKE '% %')))  -- Include VINs with spaces (not real VINs)
         AND (t.custbody_leaseend_vinno IS NULL OR t.custbody_leaseend_vinno NOT LIKE '%,%')  -- EXCLUDE multi-VIN with NULL handling
         AND t.trandate IS NOT NULL
         AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')  -- Include GENJRNL for revenue like 4106 Reserve Bonus
@@ -681,7 +723,7 @@ USING (
     SELECT
         DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
         tl.expenseaccount as account,
-        SUM(tl.foreignamount) AS total_amount
+        SUM(tl.netamount) AS total_amount
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -691,12 +733,12 @@ USING (
              OR t.custbody_leaseend_vinno LIKE '% %')    -- Include VINs with spaces (not real VINs)
         AND (t.custbody_leaseend_vinno IS NULL OR t.custbody_leaseend_vinno NOT LIKE '%,%')  -- EXCLUDE multi-VIN with NULL handling
         AND t.trandate IS NOT NULL
-        AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE')
+        AND am.transaction_type IN ('COST_OF_REVENUE', 'EXPENSE', 'OTHER_EXPENSE')
         AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'CHK', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP', 'INV WKST')  -- Include INV WKST for inventory adjustments
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Standard approval filter for consistency
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND tl.foreignamount != 0
+        AND tl.netamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY DATE_FORMAT(t.trandate, 'yyyy-MM'), tl.expenseaccount
     
@@ -704,28 +746,46 @@ USING (
     -- Multi-VIN transactions are now captured as unallocated for GL reconciliation accuracy
   ),
   
-  -- Volume bonus transactions - captures ALL Journal entries for volume bonus accounts
-  -- These are transactions that can't be matched to specific deals (positive or negative, large or small)
-  non_vin_volume_bonus AS (
+  -- Volume bonus transactions - capture posted GL lines to match GL totals and counts
+  non_vin_volume_bonus_gl AS (
     SELECT
-        so.account,
-        DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
-        YEAR(t.trandate) as transaction_year,
-        MONTH(t.trandate) as transaction_month,
-        t.trandate,
-        SUM(so.amount) AS total_amount
-    FROM bronze.ns.salesinvoiced AS so
-    INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
-    INNER JOIN account_mappings am ON so.account = am.account_id
-    INNER JOIN bronze.ns.account a ON so.account = a.id
-    WHERE a.acctnumber IN ('4110B', '4120B')  -- VSC Volume Bonus and GAP Volume Bonus 
-        AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- No deal_id
-        AND t.abbrevtype = 'GENJRNL'  -- Only Journal entries
-        AND so.amount != 0  -- Exclude zero amounts
-        AND t.trandate IS NOT NULL
-        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-        AND (t.posting = 'T' OR t.posting IS NULL)  -- Only posted transactions
-    GROUP BY so.account, DATE_FORMAT(t.trandate, 'yyyy-MM'), YEAR(t.trandate), MONTH(t.trandate), t.trandate, a.acctnumber
+      tal.account,
+      t.id AS transaction_id,
+      t.trandate,
+      YEAR(t.trandate) AS transaction_year,
+      MONTH(t.trandate) AS transaction_month,
+      tal.amount AS gl_amount,
+      a.acctnumber,
+      tal.transactionline AS gl_line_id
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN bronze.ns.account a ON tal.account = a.id
+    WHERE a.acctnumber IN ('4110B', '4120B')
+      AND tal.posting = 'T'
+      AND tal.amount != 0
+      AND t.trandate IS NOT NULL
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+  ),
+
+  -- GL-only posted expenses for specific accounts missing from transactionline (one-off NS posted GL entries)
+  gl_only_expenses AS (
+    SELECT
+      tal.account as account,
+      DATE_FORMAT(t.trandate, 'yyyy-MM') as transaction_period,
+      SUM(tal.amount) as total_amount
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN bronze.ns.account aexp ON tal.account = aexp.id
+    WHERE tal.posting = 'T'
+      AND am.transaction_type IN ('COST_OF_REVENUE','EXPENSE','OTHER_EXPENSE')
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.transactionline tl2
+        WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
+      )
+    GROUP BY tal.account, DATE_FORMAT(t.trandate, 'yyyy-MM')
   ),
   
   -- Combine VIN-matching and allocated amounts
@@ -792,8 +852,8 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(SUM(tl.foreignamount) * 100) AS BIGINT) as amount_cents,
-      CAST(SUM(tl.foreignamount) AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(SUM(tl.netamount) * 100) AS BIGINT) as amount_cents,
+      CAST(SUM(tl.netamount) AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
@@ -816,7 +876,7 @@ USING (
       AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-      AND tl.foreignamount != 0
+      AND tl.netamount != 0
       AND am.is_direct_method_account = FALSE
     GROUP BY t.id, t.custbody_le_deal_id, tl.expenseaccount, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
@@ -839,8 +899,8 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(-tl.foreignamount * 100) AS BIGINT) as amount_cents, -- Negate chargeback amounts to match diff report
-      CAST(-tl.foreignamount AS DECIMAL(15,2)) as amount_dollars, -- Negate chargeback amounts to match diff report
+      CAST(ROUND(-tl.netamount * 100) AS BIGINT) as amount_cents, -- Negate chargeback amounts to match diff report
+      CAST(-tl.netamount AS DECIMAL(15,2)) as amount_dollars, -- Negate chargeback amounts to match diff report
       'CHARGEBACK' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
@@ -856,14 +916,55 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND tl.foreignamount != 0
+        AND tl.netamount != 0
+
+    UNION ALL
+
+    -- Chargeback revenue transactions from posted GL (covers revenue-side chargebacks not in transactionline.expenseaccount)
+    SELECT
+      CONCAT('GL_CHARGEBACK_', tal.account, '_', t.id, '_', tal.transactionline, '_REVENUE') as transaction_key,
+      NULL as deal_key,
+      CAST(tal.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(COALESCE(t.custbody_leaseend_vinno, '')) as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am_rev.transaction_type,
+      am_rev.transaction_category,
+      am_rev.transaction_subcategory,
+      -- Chargebacks should reduce revenue; enforce negative sign
+      CAST(ROUND(-ABS(tal.amount) * 100) AS BIGINT) as amount_cents,
+      CAST(-ABS(tal.amount) AS DECIMAL(15,2)) as amount_dollars,
+      'GL_CHARGEBACK' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionaccountingline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(0 AS INT) AS credit_memo_date_key,
+      CAST(0 AS INT) AS credit_memo_time_key,
+      'POSTED' AS netsuite_posting_status
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN account_mappings am_rev ON tal.account = am_rev.account_id
+    WHERE am_rev.transaction_subcategory = 'CHARGEBACK'
+      AND tal.posting = 'T'
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
+      -- Avoid double-counting with expense-side chargeback capture
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.transactionline tlx 
+        WHERE tlx.transaction = t.id AND tlx.expenseaccount = tal.account
+      )
 
     UNION ALL
 
     -- DIRECT method transactions for specific problematic accounts
     -- Properly deduplicated by business keys to prevent same transaction appearing multiple times
     SELECT
-      CONCAT('DIRECT_', account_id, '_', deal_id, '_', DATE_FORMAT(trandate, 'yyyyMMdd'), '_', CAST(amount_dollars * 100 AS BIGINT)) as transaction_key,
+      CONCAT('DIRECT_', account_id, '_', deal_id, '_', transaction_id, '_', DATE_FORMAT(trandate, 'yyyyMMdd'), '_', CAST(amount_dollars * 100 AS BIGINT)) as transaction_key,
       CAST(deal_id AS STRING) as deal_key,
       CAST(account_id AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
@@ -885,11 +986,12 @@ USING (
       FALSE AS has_credit_memo,  -- Credit memos handled separately
       CAST(0 AS INT) AS credit_memo_date_key,
       CAST(0 AS INT) AS credit_memo_time_key,
-      -- Posting status fields
-      'POSTED' AS netsuite_posting_status  -- DIRECT method accounts are always considered posted
+      -- Posting status fields: treat DIRECT as posted to avoid excluding valid GL-backed entries in view
+      'POSTED' AS netsuite_posting_status
     FROM (
       -- Deduplicate by business logic first - MODIFIED for 100% accuracy
       SELECT
+        t.id as transaction_id,
         COALESCE(t.custbody_le_deal_id, 0) as deal_id,
         COALESCE(tl.expenseaccount, so.account) as account_id,
         t.trandate,
@@ -898,7 +1000,7 @@ USING (
         am.transaction_category,
         am.transaction_subcategory,
         -- Use original signs as they appear in NetSuite
-        COALESCE(tl.foreignamount, so.amount) as amount_dollars,
+        COALESCE(tl.netamount, so.amount) as amount_dollars,
         CASE WHEN tl.id IS NOT NULL THEN 'bronze.ns.transactionline' ELSE 'bronze.ns.salesinvoiced' END as source_table,
                ROW_NUMBER() OVER (
            PARTITION BY 
@@ -915,8 +1017,8 @@ USING (
           AND t.abbrevtype IN ('BILL', 'GENJRNL', 'BILLCRED', 'CC', 'CC CRED', 'INV', 'CHK', 'CREDMEM', 'CREDITMEMO', 'ITEMSHIP', 'PAY CHK', 'DEP', 'ITEM RCP', 'INV WKST', 'SALESORD')  -- Include ALL transaction types for DIRECT method 100% accuracy
           AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
           AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
-          AND (t.posting = 'T' OR t.posting IS NULL)  -- FIXED: Only include posted transactions to match NetSuite GL accuracy
-          AND COALESCE(tl.foreignamount, so.amount) != 0
+          AND (t.posting = 'T' OR t.posting IS NULL)  -- Base keeps both; gold view filters to posted
+          AND COALESCE(tl.netamount, so.amount) != 0
           -- REMOVED: Future date filter to include legitimate future-dated posted transactions
           -- AND t.trandate <= CURRENT_DATE()  -- Only include transactions up to today
     ) deduped
@@ -927,7 +1029,7 @@ USING (
     -- Additional DIRECT method capture for inventory transactions (ITEMSHIP, ITEM RCP) 
     -- These transactions bypass transactionline and go directly to GL via transactionaccountingline
     SELECT
-      CONCAT('DIRECT_GL_', tal.account, '_', t.id, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
+      CONCAT('DIRECT_GL_', tal.account, '_', COALESCE(t.custbody_le_deal_id, 0), '_', t.id, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
       CAST(COALESCE(t.custbody_le_deal_id, 0) AS STRING) as deal_key,
       CAST(tal.account AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
@@ -941,8 +1043,16 @@ USING (
       am.transaction_category,
       am.transaction_subcategory,
       -- Use original signs as they appear in NetSuite
-      CAST(ROUND(tal.amount * 100) AS BIGINT) as amount_cents,
-      CAST(tal.amount AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(acc_gl.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -tal.amount 
+                    ELSE tal.amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(acc_gl.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -tal.amount 
+            ELSE tal.amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
       'DIRECT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionaccountingline' as _source_table,
@@ -953,9 +1063,10 @@ USING (
       'POSTED' AS netsuite_posting_status  -- GL transactions are always posted
     FROM bronze.ns.transactionaccountingline tal
     INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN bronze.ns.account acc_gl ON tal.account = acc_gl.id
     INNER JOIN account_mappings am ON tal.account = am.account_id
     WHERE am.is_direct_method_account = TRUE  -- Only DIRECT method accounts
-        AND t.abbrevtype IN ('ITEMSHIP', 'ITEM RCP', 'BILL', 'BILLCRED', 'INV', 'CREDMEM')  -- Inventory and GL-direct transactions
+        AND t.abbrevtype IN ('ITEMSHIP', 'ITEM RCP', 'BILL', 'BILLCRED', 'INV', 'CREDMEM', 'GENJRNL', 'PAY CHK', 'CC', 'CC CRED', 'CHK', 'DEP')  -- Include payroll, journal, cards
         AND tal.posting = 'T'  -- Only posted GL entries
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
@@ -965,11 +1076,284 @@ USING (
             SELECT 1 FROM bronze.ns.transactionline tl2 
             WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
         )
-        AND NOT EXISTS (
-            SELECT 1 FROM bronze.ns.salesinvoiced so2 
-            WHERE so2.transaction = t.id AND so2.account = tal.account
-        )
 
+    UNION ALL
+
+    -- GL-posted transactions for NON-DIRECT accounts to capture GENJRNL/PAY CHK and other GL-only postings
+    -- Restrict to expense-side categories to avoid double counting revenue GL lines (handled in GL_REV below)
+    SELECT
+      CONCAT('GL_', tal.account, '_', t.id, '_', tal.transactionline, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
+      CAST(COALESCE(t.custbody_le_deal_id, 0) AS STRING) as deal_key,
+      CAST(tal.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(COALESCE(t.custbody_leaseend_vinno, '')) as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(acc_gl_v.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -tal.amount 
+                    ELSE tal.amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(acc_gl_v.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -tal.amount 
+            ELSE tal.amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
+      'GL' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionaccountingline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(0 AS INT) AS credit_memo_date_key,
+      CAST(0 AS INT) AS credit_memo_time_key,
+      'POSTED' AS netsuite_posting_status
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    INNER JOIN bronze.ns.account acc_gl_v ON tal.account = acc_gl_v.id
+    WHERE am.is_direct_method_account = FALSE
+      AND am.transaction_type IN ('COST_OF_REVENUE','EXPENSE','OTHER_EXPENSE')
+      AND tal.posting = 'T'
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
+      -- Avoid double-counting: exclude transactions already captured in transactionline/salesinvoiced for the same account
+      AND NOT EXISTS (
+          SELECT 1 FROM bronze.ns.transactionline tl2 
+          WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
+            AND SIGN(tl2.netamount) = SIGN(tal.amount)
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM bronze.ns.salesinvoiced so2 
+          WHERE so2.transaction = t.id AND so2.account = tal.account
+      )
+
+    UNION ALL
+
+    -- GL-posted transactions specifically for 4110C/4120C cost accounts (ensure cost is fully captured)
+    -- These accounts are in the 4xxx family but represent cost; include regardless of mapped transaction_type
+    SELECT
+      CONCAT('GL_COST_4XXX_', tal.account, '_', t.id, '_', tal.transactionline, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
+      CAST(COALESCE(t.custbody_le_deal_id, 0) AS STRING) as deal_key,
+      CAST(tal.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(COALESCE(t.custbody_leaseend_vinno, '')) as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      -- Preserve mapped fields if available
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(acc_gl_v.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -tal.amount 
+                    ELSE tal.amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(acc_gl_v.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -tal.amount 
+            ELSE tal.amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
+      'GL' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionaccountingline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(0 AS INT) AS credit_memo_date_key,
+      CAST(0 AS INT) AS credit_memo_time_key,
+      'POSTED' AS netsuite_posting_status
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    INNER JOIN bronze.ns.account acc_gl_v ON tal.account = acc_gl_v.id
+    WHERE tal.posting = 'T'
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
+      AND acc_gl_v.acctnumber IN ('4110C','4120C')
+      -- Avoid double-counting: exclude transactions already captured in transactionline/salesinvoiced for the same account
+      AND NOT EXISTS (
+          SELECT 1 FROM bronze.ns.transactionline tl2 
+          WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM bronze.ns.salesinvoiced so2 
+          WHERE so2.transaction = t.id AND so2.account = tal.account
+      )
+
+    UNION ALL
+
+    -- GL-posted revenue for NON-DIRECT accounts to capture GL-only revenue postings (e.g., 4116)
+    -- Includes only posted GL entries and avoids double counting when salesinvoiced/transactionline contains the same account line
+    SELECT
+      CONCAT('GL_REV_', tal.account, '_', t.id, '_', tal.transactionline, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
+      CAST(COALESCE(t.custbody_le_deal_id, 0) AS STRING) as deal_key,
+      CAST(tal.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(COALESCE(t.custbody_leaseend_vinno, '')) as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(acc_gl_r.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -tal.amount  
+                    ELSE tal.amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(acc_gl_r.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -tal.amount 
+            ELSE tal.amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
+      'GL' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionaccountingline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(0 AS INT) AS credit_memo_date_key,
+      CAST(0 AS INT) AS credit_memo_time_key,
+      'POSTED' AS netsuite_posting_status
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    INNER JOIN bronze.ns.account acc_gl_r ON tal.account = acc_gl_r.id
+    WHERE am.is_direct_method_account = FALSE
+      AND am.transaction_type = 'REVENUE'
+      AND tal.posting = 'T'
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
+      -- Avoid double-count: skip if salesinvoiced already has this transaction/account
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.salesinvoiced so2 
+        WHERE so2.transaction = t.id AND so2.account = tal.account
+      )
+      -- Keep single NOT EXISTS for transactionline; remove duplicate predicate
+
+    UNION ALL
+
+    -- GL-only VIN revenue (posted GL lines on 4xxx with valid VIN and deal_id) not present in salesinvoiced
+    SELECT
+      CONCAT('GL_ONLY_VIN_', tal.account, '_', t.id, '_', tal.transactionline, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
+      CAST(t.custbody_le_deal_id AS STRING) as deal_key,
+      CAST(tal.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      UPPER(t.custbody_leaseend_vinno) as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(acc_gl_v.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -tal.amount 
+                    ELSE tal.amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(acc_gl_v.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -tal.amount 
+            ELSE tal.amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
+      'GL_ONLY_VIN' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionaccountingline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(0 AS INT) AS credit_memo_date_key,
+      CAST(0 AS INT) AS credit_memo_time_key,
+      'POSTED' AS netsuite_posting_status
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN bronze.ns.account acc_gl_v ON tal.account = acc_gl_v.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    WHERE tal.posting = 'T'
+      AND am.transaction_type = 'REVENUE'
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
+      AND LENGTH(t.custbody_leaseend_vinno) = 17
+      AND t.custbody_leaseend_vinno NOT LIKE '%,%'
+      AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+      -- Dynamically include all revenue subaccounts via account_mappings (no hard-coded list)
+      AND am.transaction_type = 'REVENUE'
+      -- Avoid double-count: skip if salesinvoiced already has this transaction/account
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.salesinvoiced so2 
+        WHERE so2.transaction = t.id AND so2.account = tal.account
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.transactionline tl2 
+        WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
+      )
+
+    UNION ALL
+
+    -- GL-only NON-VIN revenue (posted GL lines on 4xxx without valid VIN or without deal)
+    SELECT
+      CONCAT('GL_ONLY_NONVIN_', tal.account, '_', t.id, '_', tal.transactionline, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
+      NULL as deal_key,
+      CAST(tal.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      NULL as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(acc_gl_n.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -tal.amount 
+                    ELSE tal.amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(acc_gl_n.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -tal.amount 
+            ELSE tal.amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
+      'GL_ONLY' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionaccountingline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(0 AS INT) AS credit_memo_date_key,
+      CAST(0 AS INT) AS credit_memo_time_key,
+      'POSTED' AS netsuite_posting_status
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN bronze.ns.account acc_gl_n ON tal.account = acc_gl_n.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    WHERE tal.posting = 'T'
+      AND am.transaction_type = 'REVENUE'
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
+      AND (t.custbody_leaseend_vinno IS NULL OR LENGTH(t.custbody_leaseend_vinno) != 17 OR t.custbody_leaseend_vinno LIKE '%,%'
+           OR t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)
+      -- Dynamically include all revenue subaccounts via account_mappings (no hard-coded list)
+      AND am.transaction_type = 'REVENUE'
+      -- Avoid double-count: skip if salesinvoiced already has this transaction/account
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.salesinvoiced so2 
+        WHERE so2.transaction = t.id AND so2.account = tal.account
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.transactionline tl2 
+        WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
+      )
     UNION ALL
 
     -- VIN-only revenue transactions (VIN exists but NOT already captured by VIN_MATCH)
@@ -1083,6 +1467,12 @@ USING (
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
+        -- Ensure a posted GL line exists for the same transaction/account to match GL
+        AND EXISTS (
+          SELECT 1 FROM bronze.ns.transactionaccountingline tal
+          WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
+            AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+        )
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY t.id, so.account, t.trandate, am.transaction_type, am.transaction_category, am.transaction_subcategory, a.acctnumber
 
@@ -1104,8 +1494,8 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(SUM(tl.foreignamount) * 100) AS BIGINT) as amount_cents,
-      CAST(SUM(tl.foreignamount) AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(SUM(tl.netamount) * 100) AS BIGINT) as amount_cents,
+      CAST(SUM(tl.netamount) AS DECIMAL(15,2)) as amount_dollars,
       'MULTI_VIN_UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
@@ -1124,7 +1514,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND tl.foreignamount != 0
+        AND tl.netamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
     GROUP BY t.id, tl.expenseaccount, t.trandate, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
@@ -1137,16 +1527,17 @@ USING (
       CONCAT(canonical_dv.deal_id, '_', vrm.account, '_VIN_RESOLVED_REVENUE') as transaction_key,
       CAST(canonical_dv.deal_id AS STRING) as deal_key,
       CAST(vrm.account AS STRING) as account_key,
-      COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_mt, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
-      COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_mt, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
-      COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_utc, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
-      COALESCE(CAST(DATE_FORMAT(rrwv.revenue_recognition_date_utc, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      COALESCE(CAST(REPLACE(rrwv.revenue_recognition_period, '-', '') || '01' AS BIGINT), 0) AS netsuite_posting_date_key,
+      CAST(0 AS BIGINT) AS netsuite_posting_time_key,
+      COALESCE(CAST(REPLACE(rrwv.revenue_recognition_period, '-', '') || '01' AS INT), 0) AS revenue_recognition_date_key,
+      CAST(0 AS INT) AS revenue_recognition_time_key,
       vrm.vin,
       rrwv.revenue_recognition_month as month,
       rrwv.revenue_recognition_year as year,
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
+      -- Use original signs as they appear in NetSuite
       CAST(ROUND(vrm.total_amount * 100) AS BIGINT) as amount_cents,
       CAST(vrm.total_amount AS DECIMAL(15,2)) as amount_dollars,
       'VIN_RESOLVED' as allocation_method,
@@ -1155,8 +1546,8 @@ USING (
       CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
       COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
       COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
-      -- Posting status fields
-      'POSTED' AS netsuite_posting_status  -- VIN_RESOLVED transactions are filtered to posted only
+      -- Posting status fields: VIN_RESOLVED is derived, not a posted GL line
+      'UNPOSTED' AS netsuite_posting_status
     FROM vin_resolved_missing_revenue vrm
     INNER JOIN (
         SELECT vin, MAX(deal_id) as deal_id FROM deal_vins GROUP BY vin
@@ -1190,8 +1581,8 @@ USING (
       FALSE AS has_credit_memo,
       CAST(NULL AS INT) AS credit_memo_date_key,
       CAST(NULL AS INT) AS credit_memo_time_key,
-      -- Posting status fields  
-      'POSTED' AS netsuite_posting_status  -- PERIOD_ALLOCATION transactions are filtered to posted only
+      -- Posting status fields: PERIOD_ALLOCATION is derived, not a posted GL line
+      'UNPOSTED' AS netsuite_posting_status
     FROM revenue_recognition_with_vins rrwv
     INNER JOIN missing_vin_revenue mvr ON rrwv.revenue_recognition_period = mvr.revenue_recognition_period
     INNER JOIN deals_per_period dp ON rrwv.revenue_recognition_period = dp.revenue_recognition_period
@@ -1220,8 +1611,8 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(tl.foreignamount * 100) AS BIGINT) as amount_cents,
-      CAST(tl.foreignamount AS DECIMAL(15,2)) as amount_dollars,
+      CAST(ROUND(tl.netamount * 100) AS BIGINT) as amount_cents,
+      CAST(tl.netamount AS DECIMAL(15,2)) as amount_dollars,
       'MISSING_VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
@@ -1242,7 +1633,7 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND tl.foreignamount != 0
+        AND tl.netamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
 
     UNION ALL
@@ -1262,6 +1653,7 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
+      -- Use original signs as they appear in NetSuite
       CAST(ROUND(SUM(so.amount) * 100) AS BIGINT) as amount_cents,
       CAST(SUM(so.amount) AS DECIMAL(15,2)) as amount_dollars,
       'ORPHANED_VIN' as allocation_method,
@@ -1298,6 +1690,12 @@ USING (
           SELECT 1 FROM silver.finance.bridge_vin_deal bd
           WHERE UPPER(bd.vin) = UPPER(t.custbody_leaseend_vinno)
             AND bd.is_active = TRUE AND bd.vin IS NOT NULL AND LENGTH(bd.vin) = 17
+        )
+        -- Ensure a posted GL line exists for the same transaction/account to match GL
+        AND EXISTS (
+          SELECT 1 FROM bronze.ns.transactionaccountingline tal
+          WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
+            AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
         )
     GROUP BY t.id, so.account, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
@@ -1367,35 +1765,88 @@ USING (
 
     UNION ALL
 
-    -- Non-VIN volume bonus transactions (Journal entry adjustments)
+    -- GL-only expense transactions (no transactionline representation) - line level
     SELECT
-      CONCAT('NON_VIN_VOLUME_BONUS_', nvvb.account, '_', DATE_FORMAT(nvvb.trandate, 'yyyyMMdd'), '_', CAST(ROUND(nvvb.total_amount * 100) AS BIGINT)) as transaction_key,
-      NULL as deal_key,  -- No deal association for non-VIN volume bonus adjustments
+      CONCAT('GL_ONLY_EXP_', tal.account, '_', t.id, '_', DATE_FORMAT(t.trandate, 'yyyyMMdd'), '_', CAST(ROUND(tal.amount * 100) AS BIGINT)) as transaction_key,
+      NULL as deal_key,
+      CAST(tal.account AS STRING) as account_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
+      COALESCE(CAST(DATE_FORMAT(t.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
+      NULL as vin,
+      MONTH(t.trandate) as month,
+      YEAR(t.trandate) as year,
+      am.transaction_type,
+      am.transaction_category,
+      am.transaction_subcategory,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(aexp.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -tal.amount 
+                    ELSE tal.amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(aexp.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -tal.amount 
+            ELSE tal.amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
+      'GL_ONLY_EXPENSE' as allocation_method,
+      CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
+      'bronze.ns.transactionaccountingline' as _source_table,
+      FALSE AS has_credit_memo,
+      CAST(NULL AS INT) AS credit_memo_date_key,
+      CAST(NULL AS INT) AS credit_memo_time_key,
+      'POSTED' AS netsuite_posting_status
+    FROM bronze.ns.transactionaccountingline tal
+    INNER JOIN bronze.ns.transaction t ON tal.transaction = t.id
+    INNER JOIN bronze.ns.account aexp ON tal.account = aexp.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    WHERE tal.posting = 'T'
+      AND aexp.acctnumber IN ('5510','6100','6200','6040','5402','5401','5404','5141','6510','7140','5210')
+      AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+      AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+      AND tal.amount != 0
+      AND NOT EXISTS (
+        SELECT 1 FROM bronze.ns.transactionline tl2
+        WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
+          AND t.abbrevtype NOT IN ('ITEMSHIP', 'ITEM RCP')  -- Allow inventory transactions through
+      )
+
+    UNION ALL
+
+    -- GL volume bonus transactions (line-level to align with GL totals and counts)
+    SELECT
+      CONCAT('GL_VOLUME_BONUS_', nvvb.account, '_', nvvb.transaction_id, '_', nvvb.gl_line_id, '_', DATE_FORMAT(nvvb.trandate, 'yyyyMMdd'), '_', CAST(ROUND(nvvb.gl_amount * 100) AS BIGINT)) as transaction_key,
+      NULL as deal_key,
       CAST(nvvb.account AS STRING) as account_key,
       COALESCE(CAST(DATE_FORMAT(nvvb.trandate, 'yyyyMMdd') AS BIGINT), 0) AS netsuite_posting_date_key,
       COALESCE(CAST(DATE_FORMAT(nvvb.trandate, 'HHmmss') AS BIGINT), 0) AS netsuite_posting_time_key,
       COALESCE(CAST(DATE_FORMAT(nvvb.trandate, 'yyyyMMdd') AS INT), 0) AS revenue_recognition_date_key,
       COALESCE(CAST(DATE_FORMAT(nvvb.trandate, 'HHmmss') AS INT), 0) AS revenue_recognition_time_key,
-      NULL as vin,  -- No VIN for these adjustments
+      NULL as vin,
       nvvb.transaction_month as month,
       nvvb.transaction_year as year,
-      am.transaction_type,
-      am.transaction_category,
-      am.transaction_subcategory,
-      -- Use original signs as they appear in NetSuite
-      CAST(ROUND(nvvb.total_amount * 100) AS BIGINT) as amount_cents,
-      CAST(nvvb.total_amount AS DECIMAL(15,2)) as amount_dollars,
-      'NON_VIN_VOLUME_BONUS' as allocation_method,
+      'REVENUE' as transaction_type,
+      CASE WHEN nvvb.acctnumber LIKE '4110%' THEN 'VSC' ELSE 'GAP' END as transaction_category,
+      'VOLUME_BONUS' as transaction_subcategory,
+      CAST(ROUND((CASE 
+                    WHEN CAST(REGEXP_EXTRACT(nvvb.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+                      THEN -nvvb.gl_amount 
+                    ELSE nvvb.gl_amount 
+                  END) * 100) AS BIGINT) as amount_cents,
+      CAST(CASE 
+            WHEN CAST(REGEXP_EXTRACT(nvvb.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
+              THEN -nvvb.gl_amount 
+            ELSE nvvb.gl_amount 
+          END AS DECIMAL(15,2)) as amount_dollars,
+      'GL_VOLUME_BONUS' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      'bronze.ns.salesinvoiced' as _source_table,
+      'bronze.ns.transactionaccountingline' as _source_table,
       FALSE AS has_credit_memo,
       CAST(NULL AS INT) AS credit_memo_date_key,
       CAST(NULL AS INT) AS credit_memo_time_key,
-      -- Posting status fields
-      'POSTED' AS netsuite_posting_status  -- Non-VIN volume bonus transactions are filtered to posted only
-    FROM non_vin_volume_bonus nvvb
-    INNER JOIN account_mappings am ON nvvb.account = am.account_id
-    INNER JOIN bronze.ns.account a ON nvvb.account = a.id
+      'POSTED' AS netsuite_posting_status
+    FROM non_vin_volume_bonus_gl nvvb
 
 
   ),
@@ -1403,11 +1854,11 @@ USING (
   final_transactions_with_account_info AS (
     SELECT
         ftb.*,
-        a.acctnumber,
+        acc_ft.acctnumber,
         ROW_NUMBER() OVER (ORDER BY ftb.transaction_key) AS global_rownum,
         CONCAT(ftb.transaction_key, '_', ROW_NUMBER() OVER (ORDER BY ftb.transaction_key)) AS transaction_key_unique
     FROM final_transactions_base ftb
-    LEFT JOIN bronze.ns.account a ON ftb.account_key = CAST(a.id AS STRING)
+    LEFT JOIN bronze.ns.account acc_ft ON ftb.account_key = CAST(acc_ft.id AS STRING)
   ),
   
   -- Driver count deals: Calculate net activity per deal per month following NetSuite business rules
