@@ -833,7 +833,7 @@ USING (
       AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
       AND so.amount != 0
       AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
-    GROUP BY t.id, t.custbody_le_deal_id, so.account, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory, a.acctnumber
+    GROUP BY t.id, t.custbody_le_deal_id, so.account, t.trandate, t.custbody_leaseend_vinno, am.transaction_type, am.transaction_category, am.transaction_subcategory, a.acctnumber, so.uniquekey
 
         UNION ALL
 
@@ -1233,10 +1233,13 @@ USING (
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
       AND tal.amount != 0
-      -- Avoid double-count: skip if salesinvoiced already has this transaction/account
+      -- Avoid double-count: skip if salesinvoiced already has this transaction/account AND qualifies for VIN_MATCH
       AND NOT EXISTS (
         SELECT 1 FROM bronze.ns.salesinvoiced so2 
         WHERE so2.transaction = t.id AND so2.account = tal.account
+          AND t.custbody_le_deal_id IS NOT NULL AND t.custbody_le_deal_id != 0
+          AND LENGTH(t.custbody_leaseend_vinno) = 17
+          AND t.custbody_leaseend_vinno NOT LIKE '%,%'
       )
       -- Avoid double-count: skip if transactionline already has this transaction/account (for chargebacks, etc.)
       AND NOT EXISTS (
@@ -1807,6 +1810,20 @@ USING (
     INNER JOIN account_mappings am ON tal.account = am.account_id
     WHERE tal.posting = 'T'
       AND aexp.acctnumber IN ('5510','6100','6200','6040','5402','5401','5404','5141','6510','7140','5210')
+      AND (am.is_direct_method_account = FALSE 
+           OR (t.abbrevtype IN ('ITEMSHIP', 'ITEM RCP') 
+               AND NOT EXISTS (
+                 SELECT 1 FROM bronze.ns.transactionline tl_check
+                 WHERE tl_check.transaction = t.id 
+                   AND tl_check.expenseaccount = tal.account
+                   AND tl_check.netamount IS NOT NULL
+               )
+               AND NOT EXISTS (
+                 SELECT 1 FROM bronze.ns.salesinvoiced so_check
+                 WHERE so_check.transaction = t.id 
+                   AND so_check.account = tal.account
+                   AND so_check.amount IS NOT NULL
+               )))  -- Only allow ITEMSHIP/ITEM RCP if not capturable by DIRECT method
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
       AND tal.amount != 0
