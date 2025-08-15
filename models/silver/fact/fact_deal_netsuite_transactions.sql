@@ -439,6 +439,40 @@ USING (
               AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
           )
         )
+
+    UNION ALL
+
+    -- Revenue from transactionline (for transactions not in salesinvoiced)
+    SELECT
+        t.id as transaction_id,
+        UPPER(t.custbody_leaseend_vinno) as vin,
+        tl.expenseaccount as account,
+        tl.netamount as amount,
+        tl.uniquekey,
+        t.trandate,
+        t.custbody_le_deal_id as deal_id
+    FROM bronze.ns.transactionline AS tl
+    INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
+    INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
+    INNER JOIN bronze.ns.account a ON tl.expenseaccount = a.id
+    WHERE LENGTH(t.custbody_leaseend_vinno) = 17
+        AND t.custbody_leaseend_vinno IS NOT NULL
+        AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
+        AND t.custbody_le_deal_id IS NOT NULL
+        AND t.custbody_le_deal_id != 0
+        AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','INV WKST')
+        AND am.transaction_type = 'REVENUE'  -- Only revenue accounts
+        AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)
+        AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
+        AND (t.posting = 'T' OR t.posting IS NULL)
+        AND tl.netamount != 0
+        AND am.is_direct_method_account = FALSE
+        AND a.acctnumber NOT IN ('4110B', '4120B')
+        -- Avoid double-counting: exclude if already captured in salesinvoiced
+        AND NOT EXISTS (
+            SELECT 1 FROM bronze.ns.salesinvoiced so2 
+            WHERE so2.transaction = t.id AND so2.account = tl.expenseaccount
+        )
   ),
 
   -- VIN-matching expenses - USE TRANSACTIONLINE for expense accounts
@@ -526,11 +560,11 @@ USING (
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- VIN_ONLY: Only transactions without deal_ids
         AND (
-            -- For accounts 4110A and 4120A, include all transaction types including GENJRNL
-            (a.acctnumber IN ('4110A', '4120A') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST','GENJRNL'))
+            -- For revenue accounts that have GENJRNL transactions with VINs, include all transaction types including GENJRNL
+            (a.acctnumber IN ('4105', '4110', '4110A', '4120A', '4130', '4141') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST','GENJRNL'))
             OR 
             -- For other accounts, exclude GENJRNL to prevent double-counting
-            (a.acctnumber NOT IN ('4110A', '4120A') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST'))
+            (a.acctnumber NOT IN ('4105', '4110', '4110A', '4120A', '4130', '4141') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST'))
         )
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
