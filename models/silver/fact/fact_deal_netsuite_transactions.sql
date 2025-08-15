@@ -569,10 +569,10 @@ USING (
         AND tal.posting = 'T'  -- REVENUE RECONCILIATION FIX: Ensure GL posting status
         AND (
             -- For revenue accounts that have GENJRNL transactions with VINs, include all transaction types including GENJRNL
-            (a.acctnumber IN ('4105', '4110', '4110A', '4120A', '4130', '4141') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST','GENJRNL'))
+            (a.acctnumber IN ('4105', '4110', '4110A', '4120', '4120A', '4130', '4141', '4200') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST','GENJRNL','CHK'))
             OR 
             -- For other accounts, exclude GENJRNL to prevent double-counting
-            (a.acctnumber NOT IN ('4105', '4110', '4110A', '4120A', '4130', '4141') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST'))
+            (a.acctnumber NOT IN ('4105', '4110', '4110A', '4120', '4120A', '4130', '4141', '4200') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST'))
         )
         AND am.transaction_type = 'REVENUE'
         AND am.transaction_subcategory != 'CHARGEBACK'  -- Exclude chargebacks (handled separately)
@@ -584,7 +584,7 @@ USING (
         AND a.acctnumber NOT IN ('4110B', '4120B')  -- Exclude volume bonus accounts to prevent double-counting with NON_VIN_VOLUME_BONUS
         -- Remove GL EXISTS requirement for base revenue accounts; keep it for others
         AND (
-          a.acctnumber IN ('4105','4110','4120','4130','4141','4110A','4120A')
+          a.acctnumber IN ('4105','4110','4110A','4120','4120A','4130','4141','4200')
           OR EXISTS (
             SELECT 1 FROM bronze.ns.transactionaccountingline tal2
             WHERE tal2.transaction = t.id AND tal2.account = tal.account AND tal2.posting = 'T'
@@ -1746,6 +1746,11 @@ USING (
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND so.amount != 0
         AND am.is_direct_method_account = FALSE
+        -- Exclude volume bonus accounts (handled by GL_VOLUME_BONUS method)
+        AND NOT EXISTS (
+          SELECT 1 FROM bronze.ns.account a 
+          WHERE a.id = so.account AND a.acctnumber IN ('4110B', '4120B')
+        )
         -- Only include VINs that don't exist in our deal lookup tables
         AND NOT EXISTS (
           SELECT 1 FROM bronze.leaseend_db_public.cars c 
