@@ -413,7 +413,8 @@ USING (
         so.amount,
         so.uniquekey,
         t.trandate,
-        t.custbody_le_deal_id as deal_id
+        t.custbody_le_deal_id as deal_id,
+        t.abbrevtype
     FROM bronze.ns.salesinvoiced AS so
     INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
     INNER JOIN account_mappings am ON so.account = am.account_id
@@ -450,7 +451,8 @@ USING (
         tl.netamount as amount,
         tl.uniquekey,
         t.trandate,
-        t.custbody_le_deal_id as deal_id
+        t.custbody_le_deal_id as deal_id,
+        t.abbrevtype
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -487,7 +489,8 @@ USING (
         tl.netamount as amount,
         tl.uniquekey,
         t.trandate,
-        t.custbody_le_deal_id as deal_id
+        t.custbody_le_deal_id as deal_id,
+        t.abbrevtype
     FROM bronze.ns.transactionline AS tl
     INNER JOIN bronze.ns.transaction AS t ON tl.transaction = t.id
     INNER JOIN account_mappings am ON tl.expenseaccount = am.account_id
@@ -550,7 +553,8 @@ USING (
         so.account,
         so.amount,
         so.uniquekey,
-        t.trandate
+        t.trandate,
+        t.abbrevtype
     FROM bronze.ns.salesinvoiced AS so
     INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
     INNER JOIN account_mappings am ON so.account = am.account_id
@@ -731,7 +735,8 @@ USING (
         t.trandate,
         so.account,
         so.amount,
-        so.uniquekey  -- Include uniquekey to distinguish individual salesinvoiced lines
+        so.uniquekey,  -- Include uniquekey to distinguish individual salesinvoiced lines
+        t.abbrevtype
     FROM bronze.ns.salesinvoiced AS so
     INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
     INNER JOIN account_mappings am ON so.account = am.account_id
@@ -860,9 +865,17 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      -- Use original signs as they appear in NetSuite
-      CAST(ROUND(vmr.amount * 100) AS BIGINT) as amount_cents,
-      CAST(vmr.amount AS DECIMAL(15,2)) as amount_dollars,
+      -- Transaction-type-aware sign logic: Credit memos should maintain NetSuite signs
+      CAST(ROUND(
+        CASE 
+          WHEN vmr.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN vmr.amount  -- Credit memos keep NetSuite signs
+          ELSE vmr.amount  -- Regular transactions keep NetSuite signs
+        END * 100) AS BIGINT) as amount_cents,
+      CAST(
+        CASE 
+          WHEN vmr.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN vmr.amount  -- Credit memos keep NetSuite signs  
+          ELSE vmr.amount  -- Regular transactions keep NetSuite signs
+        END AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.salesinvoiced' as _source_table,
@@ -892,8 +905,17 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      CAST(ROUND(vme.amount * 100) AS BIGINT) as amount_cents,
-      CAST(vme.amount AS DECIMAL(15,2)) as amount_dollars,
+      -- Transaction-type-aware sign logic: Credit memos should maintain NetSuite signs
+      CAST(ROUND(
+        CASE 
+          WHEN vme.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN vme.amount  -- Credit memos keep NetSuite signs
+          ELSE vme.amount  -- Regular transactions keep NetSuite signs
+        END * 100) AS BIGINT) as amount_cents,
+      CAST(
+        CASE 
+          WHEN vme.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN vme.amount  -- Credit memos keep NetSuite signs
+          ELSE vme.amount  -- Regular transactions keep NetSuite signs
+        END AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionline' as _source_table,
@@ -1405,9 +1427,17 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      -- Use original signs as they appear in NetSuite
-      CAST(ROUND(vor.amount * 100) AS BIGINT) as amount_cents,
-      CAST(vor.amount AS DECIMAL(15,2)) as amount_dollars,
+      -- Transaction-type-aware sign logic: Credit memos should maintain NetSuite signs
+      CAST(ROUND(
+        CASE 
+          WHEN vor.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN vor.amount  -- Credit memos keep NetSuite signs
+          ELSE vor.amount  -- Regular transactions keep NetSuite signs
+        END * 100) AS BIGINT) as amount_cents,
+      CAST(
+        CASE 
+          WHEN vor.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN vor.amount  -- Credit memos keep NetSuite signs
+          ELSE vor.amount  -- Regular transactions keep NetSuite signs
+        END AS DECIMAL(15,2)) as amount_dollars,
       'VIN_ONLY_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.salesinvoiced' as _source_table,
@@ -1748,9 +1778,17 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      -- Use original signs as they appear in NetSuite
-      CAST(ROUND(ur.amount * 100) AS BIGINT) as amount_cents,
-      CAST(ur.amount AS DECIMAL(15,2)) as amount_dollars,
+      -- Transaction-type-aware sign logic: Credit memos should maintain NetSuite signs
+      CAST(ROUND(
+        CASE 
+          WHEN ur.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN ur.amount  -- Credit memos keep NetSuite signs
+          ELSE ur.amount  -- Regular transactions keep NetSuite signs
+        END * 100) AS BIGINT) as amount_cents,
+      CAST(
+        CASE 
+          WHEN ur.abbrevtype IN ('CREDITMEMO', 'CREDMEM') THEN ur.amount  -- Credit memos keep NetSuite signs
+          ELSE ur.amount  -- Regular transactions keep NetSuite signs
+        END AS DECIMAL(15,2)) as amount_dollars,
       'UNALLOCATED' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.salesinvoiced' as _source_table,
