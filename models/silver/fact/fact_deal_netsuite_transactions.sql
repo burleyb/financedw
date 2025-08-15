@@ -132,7 +132,7 @@ USING (
   
   -- Accounts handled by DIRECT method (by account number for maintainability)
   direct_method_accounts AS (
-    SELECT account_number FROM VALUES
+    SELECT * FROM VALUES
       ('5100'), -- COR - LEASE BUYOUT - TYPE B FIX: Major GENJRNL variances
       ('5121'), -- COR - GAP CHARGEBACK - TYPE B FIX: Unallocated variances
       ('5138'), -- COR - PENALTIES AND LATE FEES - TYPE B FIX: Operational transactions
@@ -592,8 +592,6 @@ USING (
           )
         )
   ),
-  
-
   
   -- Missing VIN transactions by period (for allocation) - ENHANCED with VIN lookup
   -- Try to resolve VINs first before allocating across deals
