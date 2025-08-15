@@ -139,7 +139,7 @@ USING (
       ('5139'), -- COR - REGISTRATION - TYPE B FIX: Non-posted transaction issues
       ('5140'), -- COR - SALES TAX - TYPE B FIX: Non-posted transaction issues  
       ('5141'), -- COR - TITLE ONLY FEES - TYPE B FIX: Non-posted transaction issues
-      ('5210'), -- COR - ACQUISITION - TYPE B FIX: MAJOR $400K+/month GENJRNL variances
+      -- ('5210'), -- COR - ACQUISITION - REMOVED: Switch to GL_ONLY_EXPENSE to fix $88K DIRECT/transactionline vs GL/transactionaccountingline discrepancy
       ('5213'), -- TRANSPORTATION - TYPE B FIX: Small operational variances
       ('5301'), -- IC FUNDING CLERKS
       ('5304'), -- IC PAYOFF TEAM  
@@ -538,6 +538,7 @@ USING (
         AND tl.netamount != 0
         AND t.trandate IS NOT NULL
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+        AND am.account_number != '5210' -- EXCLUDE: 5210 should only be handled by GL_ONLY_EXPENSE method
   ),
   
   -- Multi-VIN CTEs removed - we now capture multi-VIN transactions as unallocated for GL reconciliation
@@ -799,6 +800,7 @@ USING (
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.netamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+        AND am.account_number != '5210' -- EXCLUDE: 5210 should only be handled by GL_ONLY_EXPENSE method
     
     -- Note: Individual transactions preserved for exact GL reconciliation
     -- No more month-level aggregation that caused count and amount mismatches
@@ -1167,6 +1169,7 @@ USING (
     INNER JOIN bronze.ns.account acc_gl_v ON tal.account = acc_gl_v.id
     WHERE am.is_direct_method_account = FALSE
       AND am.transaction_type IN ('COST_OF_REVENUE','EXPENSE','OTHER_EXPENSE')
+      AND am.account_number != '5210' -- EXCLUDE: 5210 should only be handled by GL_ONLY_EXPENSE method
       AND tal.posting = 'T'
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
@@ -1579,6 +1582,7 @@ USING (
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
         AND tl.netamount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
+        AND am.account_number != '5210' -- EXCLUDE: 5210 should only be handled by GL_ONLY_EXPENSE method
     GROUP BY t.id, tl.expenseaccount, t.trandate, am.transaction_type, am.transaction_category, am.transaction_subcategory
 
     UNION ALL
@@ -1893,6 +1897,7 @@ USING (
         SELECT 1 FROM bronze.ns.transactionline tl2
         WHERE tl2.transaction = t.id AND tl2.expenseaccount = tal.account
           AND t.abbrevtype NOT IN ('ITEMSHIP', 'ITEM RCP')  -- Allow inventory transactions through
+          AND aexp.acctnumber != '5210'  -- ALLOW 5210 transactions through regardless of transactionline existence
       )
 
     UNION ALL
