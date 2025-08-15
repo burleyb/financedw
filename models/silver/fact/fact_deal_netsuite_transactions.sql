@@ -2,6 +2,7 @@
 -- Normalized NetSuite fact table with account foreign keys for flexible pivoting
 -- BASE TABLE: Contains both posted and unposted transactions
 
+
 -- Drop and recreate table to ensure correct schema
 
 DROP VIEW IF EXISTS silver.finance.fact_deal_netsuite_transactions;

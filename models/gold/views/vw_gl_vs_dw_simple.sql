@@ -128,6 +128,7 @@ ns_posted AS (
       AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','GENJRNL','BILL','BILLCRED','CC','CHK','INV WKST')  -- Ensure all transaction types are included
+      AND tal.amount != 0  -- CRITICAL FIX: Exclude zero-amount transactions that inflate counts without financial impact
       AND CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 8999
     GROUP BY a.acctnumber, YEAR(t.trandate), MONTH(t.trandate)
 ),
@@ -148,7 +149,7 @@ ns_total_direct AS (
     WHERE tal.posting = 'T'  -- Only posted GL entries
       AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
       AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
-      AND tal.amount != 0
+      AND tal.amount != 0  -- Exclude zero-amount transactions
     GROUP BY a.acctnumber, YEAR(t.trandate), MONTH(t.trandate)
 ),
 -- First calculate aggregated values
