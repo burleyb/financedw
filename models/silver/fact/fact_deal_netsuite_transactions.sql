@@ -402,7 +402,7 @@ USING (
       AND (a.isinactive != 'T' OR a.isinactive IS NULL)
   ),
   
-  -- VIN-matching transactions - USE SALESINVOICED ONLY for revenue accounts to avoid double-counting
+  -- VIN-matching transactions - USE TRANSACTIONACCOUNTINGLINE for revenue accounts for GL reconciliation accuracy
   -- MUST have BOTH VIN AND Deal ID to be considered VIN-matching
   -- Only match EXACT 17-character VINs (no commas or multiple VINs)
   -- MODIFIED: Preserve individual transactions instead of aggregating for 100% reconciliation accuracy
@@ -410,16 +410,16 @@ USING (
     SELECT
         t.id as transaction_id,
         UPPER(t.custbody_leaseend_vinno) as vin,
-        so.account,
-        so.amount,
-        so.uniquekey,
+        tal.account,
+        tal.amount * -1 as amount,  -- BUSINESS LOGIC FIX: Convert GL negative to business positive for revenue
+        tal.transactionline as uniquekey,  -- Use GL line ID as uniquekey
         t.trandate,
         t.custbody_le_deal_id as deal_id,
         t.abbrevtype
-    FROM bronze.ns.salesinvoiced AS so
-    INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
-    INNER JOIN account_mappings am ON so.account = am.account_id
-    INNER JOIN bronze.ns.account a ON so.account = a.id
+    FROM bronze.ns.transactionaccountingline AS tal  -- REVENUE RECONCILIATION FIX: Use GL amounts instead of salesinvoiced
+    INNER JOIN bronze.ns.transaction AS t ON tal.transaction = t.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    INNER JOIN bronze.ns.account a ON tal.account = a.id
     WHERE LENGTH(t.custbody_leaseend_vinno) = 17
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
@@ -430,15 +430,16 @@ USING (
         AND (t.approvalstatus = 2 OR t.approvalstatus IS NULL)  -- Approved or no approval needed
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND so.amount != 0
+        AND tal.posting = 'T'  -- REVENUE RECONCILIATION FIX: Ensure GL posting status
+        AND tal.amount != 0
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
         -- Remove GL EXISTS requirement for base revenue accounts; keep it for others
         AND (
           a.acctnumber IN ('4105','4110','4120','4130','4141','4110A','4120A')
           OR EXISTS (
-            SELECT 1 FROM bronze.ns.transactionaccountingline tal
-            WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
-              AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+            SELECT 1 FROM bronze.ns.transactionaccountingline tal2
+            WHERE tal2.transaction = t.id AND tal2.account = tal.account AND tal2.posting = 'T'
+              AND (tal2._fivetran_deleted = FALSE OR tal2._fivetran_deleted IS NULL)
           )
         )
 
@@ -544,7 +545,7 @@ USING (
   -- Multi-VIN CTEs removed - we now capture multi-VIN transactions as unallocated for GL reconciliation
   -- (Removed complex multi_vin_expenses and multi_vin_revenue CTEs)
   
-  -- VIN-only revenue - USE SALESINVOICED for revenue accounts
+  -- VIN-only revenue - USE TRANSACTIONACCOUNTINGLINE for revenue accounts for GL reconciliation accuracy
   -- Captures VINs that either have no deal_id OR have deal_id but don't match our VIN_MATCH criteria
   -- Only match EXACT 17-character VINs (no commas or multiple VINs)
   -- MODIFIED: Preserve individual transactions instead of aggregating for 100% reconciliation accuracy
@@ -552,19 +553,20 @@ USING (
     SELECT
         t.id as transaction_id,
         UPPER(t.custbody_leaseend_vinno) as vin,
-        so.account,
-        so.amount,
-        so.uniquekey,
+        tal.account,
+        tal.amount * -1 as amount,  -- BUSINESS LOGIC FIX: Convert GL negative to business positive for revenue
+        tal.transactionline as uniquekey,  -- Use GL line ID as uniquekey
         t.trandate,
         t.abbrevtype
-    FROM bronze.ns.salesinvoiced AS so
-    INNER JOIN bronze.ns.transaction AS t ON so.transaction = t.id
-    INNER JOIN account_mappings am ON so.account = am.account_id
-    INNER JOIN bronze.ns.account a ON so.account = a.id
+    FROM bronze.ns.transactionaccountingline AS tal  -- REVENUE RECONCILIATION FIX: Use GL amounts instead of salesinvoiced
+    INNER JOIN bronze.ns.transaction AS t ON tal.transaction = t.id
+    INNER JOIN account_mappings am ON tal.account = am.account_id
+    INNER JOIN bronze.ns.account a ON tal.account = a.id
     WHERE LENGTH(t.custbody_leaseend_vinno) = 17
         AND t.custbody_leaseend_vinno IS NOT NULL
         AND t.custbody_leaseend_vinno NOT LIKE '%,%'  -- Exclude multi-VIN transactions
         AND (t.custbody_le_deal_id IS NULL OR t.custbody_le_deal_id = 0)  -- VIN_ONLY: Only transactions without deal_ids
+        AND tal.posting = 'T'  -- REVENUE RECONCILIATION FIX: Ensure GL posting status
         AND (
             -- For revenue accounts that have GENJRNL transactions with VINs, include all transaction types including GENJRNL
             (a.acctnumber IN ('4105', '4110', '4110A', '4120A', '4130', '4141') AND t.abbrevtype IN ('SALESORD','CREDITMEMO','CREDMEM','INV','BILL','BILLCRED','CC','INV WKST','GENJRNL'))
@@ -577,16 +579,16 @@ USING (
         AND t.trandate IS NOT NULL
         AND (t._fivetran_deleted = FALSE OR t._fivetran_deleted IS NULL)
         AND (t.posting = 'T' OR t.posting IS NULL)  -- TYPE A FIX: Only include posted transactions
-        AND so.amount != 0
+        AND tal.amount != 0  -- REVENUE RECONCILIATION FIX: Updated amount reference
         AND am.is_direct_method_account = FALSE -- Exclude accounts handled by DIRECT method
         AND a.acctnumber NOT IN ('4110B', '4120B')  -- Exclude volume bonus accounts to prevent double-counting with NON_VIN_VOLUME_BONUS
         -- Remove GL EXISTS requirement for base revenue accounts; keep it for others
         AND (
           a.acctnumber IN ('4105','4110','4120','4130','4141','4110A','4120A')
           OR EXISTS (
-            SELECT 1 FROM bronze.ns.transactionaccountingline tal
-            WHERE tal.transaction = t.id AND tal.account = so.account AND tal.posting = 'T'
-              AND (tal._fivetran_deleted = FALSE OR tal._fivetran_deleted IS NULL)
+            SELECT 1 FROM bronze.ns.transactionaccountingline tal2
+            WHERE tal2.transaction = t.id AND tal2.account = tal.account AND tal2.posting = 'T'
+              AND (tal2._fivetran_deleted = FALSE OR tal2._fivetran_deleted IS NULL)
           )
         )
   ),
@@ -881,7 +883,7 @@ USING (
         END AS DECIMAL(15,2)) as amount_dollars,
       'VIN_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      'bronze.ns.salesinvoiced' as _source_table,
+      'bronze.ns.transactionaccountingline' as _source_table,  -- REVENUE RECONCILIATION FIX: Updated source table
       CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
       COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
       COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
@@ -1444,7 +1446,7 @@ USING (
         END AS DECIMAL(15,2)) as amount_dollars,
       'VIN_ONLY_MATCH' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
-      'bronze.ns.salesinvoiced' as _source_table,
+      'bronze.ns.transactionaccountingline' as _source_table,  -- REVENUE RECONCILIATION FIX: Updated source table
       FALSE AS has_credit_memo,
       CAST(NULL AS INT) AS credit_memo_date_key,
       CAST(NULL AS INT) AS credit_memo_time_key,
