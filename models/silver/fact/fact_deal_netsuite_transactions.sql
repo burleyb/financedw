@@ -2,7 +2,6 @@
 -- Normalized NetSuite fact table with account foreign keys for flexible pivoting
 -- BASE TABLE: Contains both posted and unposted transactions
 
-
 -- Drop and recreate table to ensure correct schema
 
 DROP VIEW IF EXISTS silver.finance.fact_deal_netsuite_transactions;
@@ -151,6 +150,7 @@ USING (
       ('5402'), -- COR - REGISTRATION EXPENSE - ADDED to capture GENJRNL/BILLCRED/CC expenses without deal_id
       ('5403'), -- COR - CUSTOMER EXPERIENCE - ADDED to capture CC/BILLCRED/GENJRNL expenses without deal_id
       ('5404'), -- COR - PENALTIES - ADDED to capture GENJRNL expenses without deal_id
+      ('5199'), -- COR - REPO - ADDED for consistent COR sign handling
       ('5510'), -- POSTAGE
       ('5520'), -- BANK BUYOUT FEES
       ('5530'), -- TITLE COR
@@ -301,10 +301,11 @@ USING (
           
           -- 5500 - COR - OTHER
           ('5199', 'COST_OF_REVENUE', 'OTHER_COR', 'REPO'),
+          ('5510', 'COST_OF_REVENUE', 'OTHER_COR', 'POSTAGE'),
+
           -- GA_EXPENSE overrides for Depreciation & Amortization
           ('7175', 'EXPENSE', 'GA_EXPENSE', 'DEPRECIATION'),
-          ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION'),
-          ('5510', 'COST_OF_REVENUE', 'OTHER_COR', 'POSTAGE')
+          ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION')
           
         AS t(account_number, transaction_type, transaction_category, transaction_subcategory)
       ) bo ON a.acctnumber = bo.account_number
@@ -1050,8 +1051,12 @@ USING (
         am.transaction_type,
         am.transaction_category,
         am.transaction_subcategory,
-        -- Use original signs as they appear in NetSuite
-        COALESCE(tl.netamount, so.amount) as amount_dollars,
+        -- Apply business sign convention: flip COR accounts (5xxx) to negative for proper EBITDA calculations
+        CASE 
+          WHEN am.transaction_type = 'COST_OF_REVENUE'
+          THEN -COALESCE(tl.netamount, so.amount)  -- Flip COR account signs to negative
+          ELSE COALESCE(tl.netamount, so.amount)   -- Keep other accounts with original signs
+        END as amount_dollars,
         CASE WHEN tl.id IS NOT NULL THEN 'bronze.ns.transactionline' ELSE 'bronze.ns.salesinvoiced' END as source_table,
                ROW_NUMBER() OVER (
            PARTITION BY 
@@ -1093,17 +1098,21 @@ USING (
       am.transaction_type,
       am.transaction_category,
       am.transaction_subcategory,
-      -- Use original signs as they appear in NetSuite
-      CAST(ROUND((CASE 
-                    WHEN CAST(REGEXP_EXTRACT(acc_gl.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
-                      THEN -tal.amount 
-                    ELSE tal.amount 
-                  END) * 100) AS BIGINT) as amount_cents,
-      CAST(CASE 
-            WHEN CAST(REGEXP_EXTRACT(acc_gl.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 
-              THEN -tal.amount 
-            ELSE tal.amount 
-          END AS DECIMAL(15,2)) as amount_dollars,
+              -- Apply business sign convention: flip revenue and COR accounts for proper calculations
+        CAST(ROUND((CASE 
+                      WHEN am.transaction_type = 'REVENUE'
+                        THEN -tal.amount  -- Flip revenue GL negatives to business positives
+                      WHEN am.transaction_type = 'COST_OF_REVENUE'
+                        THEN -tal.amount  -- Flip COR account signs to negative for EBITDA
+                      ELSE tal.amount     -- Keep other accounts with original signs
+                    END) * 100) AS BIGINT) as amount_cents,
+        CAST(CASE 
+              WHEN am.transaction_type = 'REVENUE'
+                THEN -tal.amount  -- Flip revenue GL negatives to business positives
+              WHEN am.transaction_type = 'COST_OF_REVENUE'
+                THEN -tal.amount  -- Flip COR account signs to negative for EBITDA
+              ELSE tal.amount     -- Keep other accounts with original signs
+            END AS DECIMAL(15,2)) as amount_dollars,
       'DIRECT' as allocation_method,
       CAST(1.0 AS DECIMAL(10,6)) as allocation_factor,
       'bronze.ns.transactionaccountingline' as _source_table,
