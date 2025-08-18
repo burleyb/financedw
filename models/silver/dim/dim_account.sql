@@ -120,7 +120,24 @@ USING (
 
       -- GA_EXPENSE overrides
       ('7175', 'EXPENSE', 'GA_EXPENSE', 'DEPRECIATION'),
-      ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION')
+      ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION'),
+      
+      -- 8000/9000 SERIES - OTHER INCOME/EXPENSE (excluded from EBITDA)
+      ('8000', 'OTHER_EXPENSE', 'INCOME_TAX', 'MISC_TAX'),
+      ('8010', 'OTHER_EXPENSE', 'INCOME_TAX', 'STATE_TAX'),
+      ('8011', 'OTHER_EXPENSE', 'INCOME_TAX', 'FEDERAL_TAX'),
+      ('8012', 'OTHER_EXPENSE', 'INCOME_TAX', 'DEFERRED_FEDERAL'),
+      ('8013', 'OTHER_EXPENSE', 'INCOME_TAX', 'DEFERRED_STATE'),
+      ('8020', 'OTHER_EXPENSE', 'INCOME_TAX', 'REINSURANCE_TAX'),
+      ('9000', 'OTHER_INCOME', 'NON_OPERATING', 'OTHER'),
+      ('9001', 'OTHER_INCOME', 'NON_OPERATING', 'INTEREST'),
+      ('9001D', 'OTHER_INCOME', 'NON_OPERATING', 'DIVIDEND'),
+      ('9002', 'OTHER_EXPENSE', 'NON_OPERATING', 'IMPAIRMENT'),
+      ('9003', 'OTHER_INCOME', 'NON_OPERATING', 'GAIN_LOSS'),
+      ('9005', 'OTHER_INCOME', 'NON_OPERATING', 'RENT'),
+      ('9007', 'OTHER_EXPENSE', 'NON_OPERATING', 'DONATIONS'),
+      ('9008', 'OTHER_EXPENSE', 'NON_OPERATING', 'ONE_TIME'),
+      ('9010', 'OTHER_EXPENSE', 'NON_OPERATING', 'NON_RECURRING')
     AS t(account_number, transaction_type, transaction_category, transaction_subcategory)
   ),
   
@@ -214,14 +231,22 @@ USING (
       ('7180', 'EXPENSE', 'GA_EXPENSE'),
       ('7190', 'EXPENSE', 'GA_EXPENSE'),
       ('7192', 'EXPENSE', 'GA_EXPENSE'),
-      ('8000', 'EXPENSE', 'GA_EXPENSE'),
       
-      -- Other Income/Expense Metric Groups
+      -- Other Income/Expense Metric Groups (excluded from EBITDA)
+      ('8000', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
       ('8010', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
       ('8011', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
+      ('8012', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
+      ('8013', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
+      ('8020', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
+      ('9000', 'OTHER_INCOME', 'OTHER_INCOME'),
       ('9001', 'OTHER_INCOME', 'OTHER_INCOME'),
       ('9001D', 'OTHER_INCOME', 'OTHER_INCOME'),
+      ('9002', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
+      ('9003', 'OTHER_INCOME', 'OTHER_INCOME'),
+      ('9005', 'OTHER_INCOME', 'OTHER_INCOME'),
       ('9007', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
+      ('9008', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
       ('9010', 'OTHER_EXPENSE', 'OTHER_EXPENSE')
     AS t(account_number, metric_type, metric_group)
   )
@@ -366,9 +391,9 @@ USING (
     (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190')) as is_total_revenue,
     (a.acctnumber IN ('5301','5304','5305','5320','5330','5340','5400','5401','5520','5402','5141','5530','5403','5404','5199','5510')) as is_cost_of_revenue,
     (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5403','5404','5199','5510')) as is_gross_profit,
-    (a.acctnumber IN ('6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000')) as is_operating_expense,
-    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000','9001','9001D','8010','8011','9007')) as is_net_ordinary_revenue,
-    (a.acctnumber IN ('9001','9001D','8010','8011','9007','9010')) as is_other_income_expense,
+    (a.acctnumber IN ('6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190')) as is_operating_expense,
+    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190')) as is_net_ordinary_revenue,
+    (a.acctnumber IN ('8000','8010','8011','8012','8013','8020','9000','9001','9001D','9002','9003','9005','9007','9008','9010')) as is_other_income_expense,
     (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000','9001','9001D','8010','8011','9007','9010')) as is_net_income,
     
     CASE 
