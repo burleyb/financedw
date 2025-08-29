@@ -1,8 +1,11 @@
 -- models/silver/dim/dim_vehicle.sql
 -- Dimension table for vehicles, sourced from bronze.leaseend_db_public.cars
 
--- 1. Define Table Structure
-CREATE TABLE IF NOT EXISTS silver.finance.dim_vehicle (
+-- 1. Drop existing table to fix schema mismatch and recreate with correct column names
+DROP TABLE IF EXISTS silver.finance.dim_vehicle;
+
+-- 2. Define Table Structure
+CREATE TABLE silver.finance.dim_vehicle (
   vehicle_key STRING NOT NULL, -- Natural Key (VIN)
   vin STRING NOT NULL, -- Natural Key
   deal_id STRING, -- Foreign Key
@@ -14,11 +17,11 @@ CREATE TABLE IF NOT EXISTS silver.finance.dim_vehicle (
   fuel_type STRING,
   kbb_trim_name STRING,
   kbb_valuation_date DATE,
-  kbb_trade_in_value DOUBLE,
-  kbb_retail_value DOUBLE,
+  kbb_book_value DOUBLE,
+  kbb_retail_book_value DOUBLE,
   jdp_valuation_date DATE,
-  jdp_trade_in_value DOUBLE,
-  jdp_retail_value DOUBLE,
+  jdp_adjusted_clean_trade DOUBLE,
+  jdp_adjusted_clean_retail DOUBLE,
   mileage INT,
   odometer_status STRING,
   _source_table STRING, -- Metadata: Originating source table
@@ -31,7 +34,7 @@ TBLPROPERTIES (
     'delta.autoOptimize.autoCompact' = 'true'
 );
 
--- 2. Merge incremental changes
+-- 3. Merge incremental changes
 MERGE INTO silver.finance.dim_vehicle AS target
 USING (
   -- Select the latest distinct vehicle data from the bronze cars table
@@ -41,7 +44,7 @@ USING (
     COALESCE(CAST(deal_id AS STRING), 'Unknown') AS deal_id,
     COALESCE(UPPER(make), 'Unknown') AS make,
     COALESCE(UPPER(model), 'Unknown') AS model,
-    COALESCE(CAST(year AS INT), 0) AS model_year, -- Source column is 'year'
+    COALESCE(TRY_CAST(year AS INT), 0) AS model_year, -- Source column is 'year'
     COALESCE(color, 'Unknown') AS color,
     COALESCE(vehicle_type, 'Unknown') AS vehicle_type,
     COALESCE(fuel_type, 'Unknown') AS fuel_type,
@@ -51,15 +54,15 @@ USING (
       THEN NULL 
       ELSE kbb_valuation_date 
     END as kbb_valuation_date,
-    kbb_trade_in_value,
-    kbb_retail_value,
+    book_value AS kbb_book_value,
+    retail_book_value AS kbb_retail_book_value,
     CASE 
       WHEN jdp_valuation_date < '1900-01-01' OR jdp_valuation_date > '2037-12-31' 
       THEN NULL 
       ELSE jdp_valuation_date 
     END as jdp_valuation_date,
-    jdp_trade_in_value,
-    jdp_retail_value,
+    jdp_adjusted_clean_trade,
+    jdp_adjusted_clean_retail,
     mileage,
     odometer_status,
     'bronze.leaseend_db_public.cars' AS _source_table -- Static source table name
@@ -81,10 +84,10 @@ WHEN MATCHED AND (
     target.fuel_type <> source.fuel_type OR
     target.mileage <> source.mileage OR
     target.odometer_status <> source.odometer_status OR
-    target.kbb_trade_in_value <> source.kbb_trade_in_value OR
-    target.kbb_retail_value <> source.kbb_retail_value OR
-    target.jdp_trade_in_value <> source.jdp_trade_in_value OR
-    target.jdp_retail_value <> source.jdp_retail_value OR
+    target.kbb_book_value <> source.kbb_book_value OR
+    target.kbb_retail_book_value <> source.kbb_retail_book_value OR
+    target.jdp_adjusted_clean_trade <> source.jdp_adjusted_clean_trade OR
+    target.jdp_adjusted_clean_retail <> source.jdp_adjusted_clean_retail OR
     target.kbb_valuation_date <> source.kbb_valuation_date OR
     target.jdp_valuation_date <> source.jdp_valuation_date OR
     -- Handle NULL comparisons carefully for kbb_trim_name
@@ -102,11 +105,11 @@ WHEN MATCHED AND (
     target.fuel_type = source.fuel_type,
     target.kbb_trim_name = source.kbb_trim_name,
     target.kbb_valuation_date = source.kbb_valuation_date,
-    target.kbb_trade_in_value = source.kbb_trade_in_value,
-    target.kbb_retail_value = source.kbb_retail_value,
+    target.kbb_book_value = source.kbb_book_value,
+    target.kbb_retail_book_value = source.kbb_retail_book_value,
     target.jdp_valuation_date = source.jdp_valuation_date,
-    target.jdp_trade_in_value = source.jdp_trade_in_value,
-    target.jdp_retail_value = source.jdp_retail_value,
+    target.jdp_adjusted_clean_trade = source.jdp_adjusted_clean_trade,
+    target.jdp_adjusted_clean_retail = source.jdp_adjusted_clean_retail,
     target.mileage = source.mileage,
     target.odometer_status = source.odometer_status,
     target._source_table = source._source_table,
@@ -126,11 +129,11 @@ WHEN NOT MATCHED THEN
     fuel_type,
     kbb_trim_name,
     kbb_valuation_date,
-    kbb_trade_in_value,
-    kbb_retail_value,
+    kbb_book_value,
+    kbb_retail_book_value,
     jdp_valuation_date,
-    jdp_trade_in_value,
-    jdp_retail_value,
+    jdp_adjusted_clean_trade,
+    jdp_adjusted_clean_retail,
     mileage,
     odometer_status,
     _source_table,
@@ -148,11 +151,11 @@ WHEN NOT MATCHED THEN
     source.fuel_type,
     source.kbb_trim_name,
     source.kbb_valuation_date,
-    source.kbb_trade_in_value,
-    source.kbb_retail_value,
+    source.kbb_book_value,
+    source.kbb_retail_book_value,
     source.jdp_valuation_date,
-    source.jdp_trade_in_value,
-    source.jdp_retail_value,
+    source.jdp_adjusted_clean_trade,
+    source.jdp_adjusted_clean_retail,
     source.mileage,
     source.odometer_status,
     source._source_table,
@@ -174,11 +177,11 @@ USING (
     'Unknown' as fuel_type, 
     'Unknown' as kbb_trim_name,
     NULL as kbb_valuation_date,
-    NULL as kbb_trade_in_value,
-    NULL as kbb_retail_value,
+    NULL as kbb_book_value,
+    NULL as kbb_retail_book_value,
     NULL as jdp_valuation_date,
-    NULL as jdp_trade_in_value,
-    NULL as jdp_retail_value,
+    NULL as jdp_adjusted_clean_trade,
+    NULL as jdp_adjusted_clean_retail,
     NULL as mileage,
     'Unknown' as odometer_status,
     'static' as _source_table
@@ -197,11 +200,11 @@ WHEN NOT MATCHED THEN
     fuel_type, 
     kbb_trim_name,
     kbb_valuation_date,
-    kbb_trade_in_value,
-    kbb_retail_value,
+    kbb_book_value,
+    kbb_retail_book_value,
     jdp_valuation_date,
-    jdp_trade_in_value,
-    jdp_retail_value,
+    jdp_adjusted_clean_trade,
+    jdp_adjusted_clean_retail,
     mileage,
     odometer_status,
     _source_table, 
@@ -219,11 +222,11 @@ WHEN NOT MATCHED THEN
     source.fuel_type, 
     source.kbb_trim_name,
     source.kbb_valuation_date,
-    source.kbb_trade_in_value,
-    source.kbb_retail_value,
+    source.kbb_book_value,
+    source.kbb_retail_book_value,
     source.jdp_valuation_date,
-    source.jdp_trade_in_value,
-    source.jdp_retail_value,
+    source.jdp_adjusted_clean_trade,
+    source.jdp_adjusted_clean_retail,
     source.mileage,
     source.odometer_status,
     source._source_table, 

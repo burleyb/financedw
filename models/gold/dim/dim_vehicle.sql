@@ -1,37 +1,30 @@
 -- models/gold/dim/dim_vehicle.sql
 -- Gold layer vehicle dimension table reading from silver layer
 
-CREATE TABLE IF NOT EXISTS gold.finance.dim_vehicle (
+-- Drop existing table to fix schema mismatch and recreate with correct column names
+DROP TABLE IF EXISTS gold.finance.dim_vehicle;
+
+CREATE TABLE gold.finance.dim_vehicle (
   vehicle_key STRING NOT NULL, -- Natural key (VIN)
-  vin STRING, -- Vehicle Identification Number
+  vin STRING NOT NULL, -- Vehicle Identification Number
+  deal_id STRING, -- Foreign Key
   make STRING,
   model STRING,
-  model_year SMALLINT,
+  model_year INT,
   color STRING,
   vehicle_type STRING,
   fuel_type STRING,
-  
-  -- Valuations
-  kbb_trade_in_value DECIMAL(10,2),
-  kbb_trade_in_date DATE,
-  kbb_retail_value DECIMAL(10,2),
-  kbb_retail_date DATE,
   kbb_trim_name STRING,
-  
-  jdp_trade_in_value DECIMAL(10,2),
-  jdp_trade_in_date DATE,
-  jdp_retail_value DECIMAL(10,2),
-  jdp_retail_date DATE,
-  
-  -- Mileage Information
+  kbb_valuation_date DATE,
+  kbb_book_value DOUBLE,
+  kbb_retail_book_value DOUBLE,
+  jdp_valuation_date DATE,
+  jdp_adjusted_clean_trade DOUBLE,
+  jdp_adjusted_clean_retail DOUBLE,
   mileage INT,
   odometer_status STRING,
-  
-  -- Metadata
-  created_at TIMESTAMP,
-  updated_at TIMESTAMP,
-  _source_table STRING,
-  _load_timestamp TIMESTAMP
+  _source_table STRING, -- Metadata: Originating source table
+  _load_timestamp TIMESTAMP -- Metadata: When the record was loaded/updated
 )
 USING DELTA
 COMMENT 'Gold layer vehicle dimension with VIN, specifications, and valuations'
@@ -47,88 +40,114 @@ USING (
   SELECT
     dv.vehicle_key,
     dv.vin,
+    dv.deal_id,
     dv.make,
     dv.model,
     dv.model_year,
     dv.color,
     dv.vehicle_type,
     dv.fuel_type,
-    
-    -- Valuations
-    dv.kbb_trade_in_value,
-    dv.kbb_trade_in_date,
-    dv.kbb_retail_value,
-    dv.kbb_retail_date,
     dv.kbb_trim_name,
-    
-    dv.jdp_trade_in_value,
-    dv.jdp_trade_in_date,
-    dv.jdp_retail_value,
-    dv.jdp_retail_date,
-    
-    -- Mileage Information
+    dv.kbb_valuation_date,
+    dv.kbb_book_value,
+    dv.kbb_retail_book_value,
+    dv.jdp_valuation_date,
+    dv.jdp_adjusted_clean_trade,
+    dv.jdp_adjusted_clean_retail,
     dv.mileage,
     dv.odometer_status,
-    
-    -- Metadata
-    dv.created_at,
-    dv.updated_at,
-    'silver.finance.dim_vehicle' as _source_table
+    dv._source_table
     
   FROM silver.finance.dim_vehicle dv
   WHERE dv.vehicle_key IS NOT NULL
 ) AS source
 ON target.vehicle_key = source.vehicle_key
 
--- Update existing vehicles if any attributes change
+-- Update existing vehicles if any attributes change (SCD Type 1)
 WHEN MATCHED AND (
-    COALESCE(target.make, '') <> COALESCE(source.make, '') OR
-    COALESCE(target.model, '') <> COALESCE(source.model, '') OR
-    COALESCE(target.model_year, 0) <> COALESCE(source.model_year, 0) OR
-    COALESCE(target.color, '') <> COALESCE(source.color, '') OR
-    COALESCE(target.kbb_trade_in_value, 0) <> COALESCE(source.kbb_trade_in_value, 0) OR
-    COALESCE(target.kbb_retail_value, 0) <> COALESCE(source.kbb_retail_value, 0) OR
-    COALESCE(target.jdp_trade_in_value, 0) <> COALESCE(source.jdp_trade_in_value, 0) OR
-    COALESCE(target.jdp_retail_value, 0) <> COALESCE(source.jdp_retail_value, 0) OR
-    COALESCE(target.mileage, 0) <> COALESCE(source.mileage, 0) OR
-    COALESCE(target.updated_at, CAST('1900-01-01' AS TIMESTAMP)) <> COALESCE(source.updated_at, CAST('1900-01-01' AS TIMESTAMP))
+    target.deal_id <> source.deal_id OR
+    target.make <> source.make OR
+    target.model <> source.model OR
+    target.model_year <> source.model_year OR
+    target.color <> source.color OR
+    target.vehicle_type <> source.vehicle_type OR
+    target.fuel_type <> source.fuel_type OR
+    target.mileage <> source.mileage OR
+    target.odometer_status <> source.odometer_status OR
+    target.kbb_book_value <> source.kbb_book_value OR
+    target.kbb_retail_book_value <> source.kbb_retail_book_value OR
+    target.jdp_adjusted_clean_trade <> source.jdp_adjusted_clean_trade OR
+    target.jdp_adjusted_clean_retail <> source.jdp_adjusted_clean_retail OR
+    target.kbb_valuation_date <> source.kbb_valuation_date OR
+    target.jdp_valuation_date <> source.jdp_valuation_date OR
+    -- Handle NULL comparisons carefully for kbb_trim_name
+    (target.kbb_trim_name IS NULL AND source.kbb_trim_name IS NOT NULL) OR 
+    (target.kbb_trim_name IS NOT NULL AND source.kbb_trim_name IS NULL) OR 
+    (target.kbb_trim_name <> source.kbb_trim_name)
   ) THEN
   UPDATE SET
-    target.vin = source.vin,
+    target.deal_id = source.deal_id,
     target.make = source.make,
     target.model = source.model,
     target.model_year = source.model_year,
     target.color = source.color,
     target.vehicle_type = source.vehicle_type,
     target.fuel_type = source.fuel_type,
-    target.kbb_trade_in_value = source.kbb_trade_in_value,
-    target.kbb_trade_in_date = source.kbb_trade_in_date,
-    target.kbb_retail_value = source.kbb_retail_value,
-    target.kbb_retail_date = source.kbb_retail_date,
     target.kbb_trim_name = source.kbb_trim_name,
-    target.jdp_trade_in_value = source.jdp_trade_in_value,
-    target.jdp_trade_in_date = source.jdp_trade_in_date,
-    target.jdp_retail_value = source.jdp_retail_value,
-    target.jdp_retail_date = source.jdp_retail_date,
+    target.kbb_valuation_date = source.kbb_valuation_date,
+    target.kbb_book_value = source.kbb_book_value,
+    target.kbb_retail_book_value = source.kbb_retail_book_value,
+    target.jdp_valuation_date = source.jdp_valuation_date,
+    target.jdp_adjusted_clean_trade = source.jdp_adjusted_clean_trade,
+    target.jdp_adjusted_clean_retail = source.jdp_adjusted_clean_retail,
     target.mileage = source.mileage,
     target.odometer_status = source.odometer_status,
-    target.created_at = source.created_at,
-    target.updated_at = source.updated_at,
     target._source_table = source._source_table,
     target._load_timestamp = CURRENT_TIMESTAMP()
 
 -- Insert new vehicles
 WHEN NOT MATCHED THEN
   INSERT (
-    vehicle_key, vin, make, model, model_year, color, vehicle_type, fuel_type,
-    kbb_trade_in_value, kbb_trade_in_date, kbb_retail_value, kbb_retail_date, kbb_trim_name,
-    jdp_trade_in_value, jdp_trade_in_date, jdp_retail_value, jdp_retail_date,
-    mileage, odometer_status, created_at, updated_at, _source_table, _load_timestamp
+    vehicle_key,
+    vin,
+    deal_id,
+    make,
+    model,
+    model_year,
+    color,
+    vehicle_type,
+    fuel_type,
+    kbb_trim_name,
+    kbb_valuation_date,
+    kbb_book_value,
+    kbb_retail_book_value,
+    jdp_valuation_date,
+    jdp_adjusted_clean_trade,
+    jdp_adjusted_clean_retail,
+    mileage,
+    odometer_status,
+    _source_table,
+    _load_timestamp
   )
   VALUES (
-    source.vehicle_key, source.vin, source.make, source.model, source.model_year, source.color,
-    source.vehicle_type, source.fuel_type, source.kbb_trade_in_value, source.kbb_trade_in_date,
-    source.kbb_retail_value, source.kbb_retail_date, source.kbb_trim_name, source.jdp_trade_in_value,
-    source.jdp_trade_in_date, source.jdp_retail_value, source.jdp_retail_date, source.mileage,
-    source.odometer_status, source.created_at, source.updated_at, source._source_table, CURRENT_TIMESTAMP()
+    source.vehicle_key,
+    source.vin,
+    source.deal_id,
+    source.make,
+    source.model,
+    source.model_year,
+    source.color,
+    source.vehicle_type,
+    source.fuel_type,
+    source.kbb_trim_name,
+    source.kbb_valuation_date,
+    source.kbb_book_value,
+    source.kbb_retail_book_value,
+    source.jdp_valuation_date,
+    source.jdp_adjusted_clean_trade,
+    source.jdp_adjusted_clean_retail,
+    source.mileage,
+    source.odometer_status,
+    source._source_table,
+    CURRENT_TIMESTAMP()
   ); 
