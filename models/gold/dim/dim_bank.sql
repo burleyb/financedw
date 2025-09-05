@@ -1,7 +1,10 @@
 -- models/gold/dim/dim_bank.sql
 -- Gold layer bank dimension with business enhancements
 
-CREATE TABLE IF NOT EXISTS gold.finance.dim_bank (
+-- Drop and recreate table to ensure schema consistency
+DROP TABLE IF EXISTS gold.finance.dim_bank;
+
+CREATE TABLE gold.finance.dim_bank (
   bank_key STRING NOT NULL,
   bank_name STRING,
   bank_slug STRING,
@@ -18,13 +21,32 @@ TBLPROPERTIES (
     'delta.autoOptimize.autoCompact' = 'true'
 );
 
--- Merge from silver with business enhancements
-MERGE INTO gold.finance.dim_bank AS target
-USING (
+-- Insert all data from silver layer with business enhancements
+INSERT INTO gold.finance.dim_bank (
+  bank_key,
+  bank_name,
+  bank_slug,
+  bank_category,
+  is_active,
+  bank_display_name,
+  _source_table,
+  _load_timestamp
+)
+SELECT
+  source.bank_key,
+  source.bank_name,
+  source.bank_slug,
+  source.bank_category,
+  source.is_active,
+  source.bank_display_name,
+  source._source_table,
+  source._load_timestamp
+FROM (
   SELECT
     sb.bank_key,
     sb.bank_name,
-    sb.bank_slug,
+    -- Generate bank_slug from bank_name by converting to lowercase and replacing spaces with hyphens
+    LOWER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(sb.bank_name), '[^a-zA-Z0-9\\s]', ''), '\\s+', '-')) AS bank_slug,
     -- Categorize banks based on name patterns
     CASE
       WHEN UPPER(sb.bank_name) LIKE '%CREDIT UNION%' THEN 'Credit Union'
@@ -33,42 +55,9 @@ USING (
       WHEN sb.bank_name = 'Unknown' THEN 'Unknown'
       ELSE 'Other'
     END AS bank_category,
-    CASE WHEN sb.bank_name = 'Unknown' THEN FALSE ELSE TRUE END AS is_active,
-    COALESCE(sb.bank_name, 'Unknown Bank') AS bank_display_name,
+    sb.is_active,
+    COALESCE(sb.bank_display_name, sb.bank_name, 'Unknown Bank') AS bank_display_name,
     sb._source_table,
     CURRENT_TIMESTAMP() AS _load_timestamp
   FROM silver.finance.dim_bank sb
-) AS source
-ON target.bank_key = source.bank_key
-
-WHEN MATCHED THEN
-  UPDATE SET
-    target.bank_name = source.bank_name,
-    target.bank_slug = source.bank_slug,
-    target.bank_category = source.bank_category,
-    target.is_active = source.is_active,
-    target.bank_display_name = source.bank_display_name,
-    target._source_table = source._source_table,
-    target._load_timestamp = source._load_timestamp
-
-WHEN NOT MATCHED THEN
-  INSERT (
-    bank_key,
-    bank_name,
-    bank_slug,
-    bank_category,
-    is_active,
-    bank_display_name,
-    _source_table,
-    _load_timestamp
-  )
-  VALUES (
-    source.bank_key,
-    source.bank_name,
-    source.bank_slug,
-    source.bank_category,
-    source.is_active,
-    source.bank_display_name,
-    source._source_table,
-    source._load_timestamp
-  ); 
+) AS source; 
