@@ -1,9 +1,11 @@
 -- models/gold/dim/dim_driver.sql
 -- Gold layer driver dimension table reading from silver layer
 
-CREATE TABLE IF NOT EXISTS gold.finance.dim_driver (
+-- Drop and recreate table to ensure schema consistency
+DROP TABLE IF EXISTS gold.finance.dim_driver;
+
+CREATE TABLE gold.finance.dim_driver (
   driver_key STRING NOT NULL, -- Natural key from customers.id
-  customer_id_source STRING, -- Original customer ID for reference
   first_name STRING,
   middle_name STRING,
   last_name STRING,
@@ -11,132 +13,114 @@ CREATE TABLE IF NOT EXISTS gold.finance.dim_driver (
   full_name STRING, -- Computed full name
   email STRING,
   phone_number STRING,
+  home_phone_number STRING,
   
-  -- Current Address Information
-  current_address_line1 STRING,
-  current_address_line2 STRING,
-  current_city STRING,
-  current_state STRING,
-  current_zip STRING,
-  current_county STRING,
+  -- Address Information
+  city STRING,
+  state STRING,
+  zip STRING,
+  county STRING,
   
   -- Demographics
-  age_at_first_deal INT,
-  date_of_birth DATE, -- Masked/NULL for PII compliance
+  date_of_birth DATE, -- From silver (dob)
+  marital_status STRING,
+  age INT,
+  age_group STRING, -- Business enhancement
   
   -- Financial Information
-  finscore DECIMAL(5,2),
-  finscore_date DATE,
+  finscore DOUBLE,
+  finscore_category STRING, -- Business enhancement
   
   -- Metadata
-  created_at TIMESTAMP,
-  updated_at TIMESTAMP,
   _source_table STRING,
   _load_timestamp TIMESTAMP
 )
 USING DELTA
-COMMENT 'Gold layer driver dimension with customer information and current address'
-PARTITIONED BY (current_state)
+COMMENT 'Gold layer driver dimension with customer information and business enhancements'
+PARTITIONED BY (state)
 TBLPROPERTIES (
     'delta.autoOptimize.optimizeWrite' = 'true',
     'delta.autoOptimize.autoCompact' = 'true'
 );
 
--- Merge data from silver layer
-MERGE INTO gold.finance.dim_driver AS target
-USING (
-  SELECT
-    dd.driver_key,
-    dd.customer_id_source,
-    dd.first_name,
-    dd.middle_name,
-    dd.last_name,
-    dd.name_suffix,
-    -- Compute full name
-    TRIM(CONCAT_WS(' ', 
-      dd.first_name, 
-      dd.middle_name, 
-      dd.last_name, 
-      dd.name_suffix
-    )) as full_name,
-    dd.email,
-    dd.phone_number,
-    
-    -- Current Address
-    dd.current_address_line1,
-    dd.current_address_line2,
-    dd.current_city,
-    dd.current_state,
-    dd.current_zip,
-    dd.current_county,
-    
-    -- Demographics
-    dd.age_at_first_deal,
-    dd.date_of_birth, -- This should be NULL for PII compliance
-    
-    -- Financial Information
-    dd.finscore,
-    dd.finscore_date,
-    
-    -- Metadata
-    dd.created_at,
-    dd.updated_at,
-    'silver.finance.dim_driver' as _source_table
-    
-  FROM silver.finance.dim_driver dd
-  WHERE dd.driver_key IS NOT NULL
-) AS source
-ON target.driver_key = source.driver_key
-
--- Update existing drivers if any attributes change
-WHEN MATCHED AND (
-    COALESCE(target.first_name, '') <> COALESCE(source.first_name, '') OR
-    COALESCE(target.last_name, '') <> COALESCE(source.last_name, '') OR
-    COALESCE(target.email, '') <> COALESCE(source.email, '') OR
-    COALESCE(target.phone_number, '') <> COALESCE(source.phone_number, '') OR
-    COALESCE(target.current_address_line1, '') <> COALESCE(source.current_address_line1, '') OR
-    COALESCE(target.current_city, '') <> COALESCE(source.current_city, '') OR
-    COALESCE(target.current_state, '') <> COALESCE(source.current_state, '') OR
-    COALESCE(target.current_zip, '') <> COALESCE(source.current_zip, '') OR
-    COALESCE(target.finscore, 0) <> COALESCE(source.finscore, 0) OR
-    COALESCE(target.updated_at, CAST('1900-01-01' AS TIMESTAMP)) <> COALESCE(source.updated_at, CAST('1900-01-01' AS TIMESTAMP))
-  ) THEN
-  UPDATE SET
-    target.customer_id_source = source.customer_id_source,
-    target.first_name = source.first_name,
-    target.middle_name = source.middle_name,
-    target.last_name = source.last_name,
-    target.name_suffix = source.name_suffix,
-    target.full_name = source.full_name,
-    target.email = source.email,
-    target.phone_number = source.phone_number,
-    target.current_address_line1 = source.current_address_line1,
-    target.current_address_line2 = source.current_address_line2,
-    target.current_city = source.current_city,
-    target.current_state = source.current_state,
-    target.current_zip = source.current_zip,
-    target.current_county = source.current_county,
-    target.age_at_first_deal = source.age_at_first_deal,
-    target.date_of_birth = source.date_of_birth,
-    target.finscore = source.finscore,
-    target.finscore_date = source.finscore_date,
-    target.created_at = source.created_at,
-    target.updated_at = source.updated_at,
-    target._source_table = source._source_table,
-    target._load_timestamp = CURRENT_TIMESTAMP()
-
--- Insert new drivers
-WHEN NOT MATCHED THEN
-  INSERT (
-    driver_key, customer_id_source, first_name, middle_name, last_name, name_suffix, full_name,
-    email, phone_number, current_address_line1, current_address_line2, current_city, current_state,
-    current_zip, current_county, age_at_first_deal, date_of_birth, finscore, finscore_date,
-    created_at, updated_at, _source_table, _load_timestamp
-  )
-  VALUES (
-    source.driver_key, source.customer_id_source, source.first_name, source.middle_name, source.last_name,
-    source.name_suffix, source.full_name, source.email, source.phone_number, source.current_address_line1,
-    source.current_address_line2, source.current_city, source.current_state, source.current_zip,
-    source.current_county, source.age_at_first_deal, source.date_of_birth, source.finscore, source.finscore_date,
-    source.created_at, source.updated_at, source._source_table, CURRENT_TIMESTAMP()
-  ); 
+-- Insert all data from silver layer with business enhancements
+INSERT INTO gold.finance.dim_driver (
+  driver_key,
+  first_name,
+  middle_name,
+  last_name,
+  name_suffix,
+  full_name,
+  email,
+  phone_number,
+  home_phone_number,
+  city,
+  state,
+  zip,
+  county,
+  date_of_birth,
+  marital_status,
+  age,
+  age_group,
+  finscore,
+  finscore_category,
+  _source_table,
+  _load_timestamp
+)
+SELECT
+  dd.driver_key,
+  dd.first_name,
+  dd.middle_name,
+  dd.last_name,
+  dd.name_suffix,
+  -- Compute full name
+  TRIM(CONCAT_WS(' ', 
+    dd.first_name, 
+    dd.middle_name, 
+    dd.last_name, 
+    dd.name_suffix
+  )) as full_name,
+  dd.email,
+  dd.phone_number,
+  dd.home_phone_number,
+  
+  -- Address Information
+  dd.city,
+  dd.state,
+  dd.zip,
+  dd.county,
+  
+  -- Demographics
+  dd.dob as date_of_birth,
+  dd.marital_status,
+  dd.age,
+  -- Age group categorization
+  CASE
+    WHEN dd.age IS NULL THEN 'Unknown'
+    WHEN dd.age < 25 THEN 'Under 25'
+    WHEN dd.age >= 25 AND dd.age < 35 THEN '25-34'
+    WHEN dd.age >= 35 AND dd.age < 45 THEN '35-44'
+    WHEN dd.age >= 45 AND dd.age < 55 THEN '45-54'
+    WHEN dd.age >= 55 AND dd.age < 65 THEN '55-64'
+    WHEN dd.age >= 65 THEN '65+'
+    ELSE 'Unknown'
+  END as age_group,
+  
+  -- Financial Information
+  dd.finscore,
+  -- Finscore categorization
+  CASE
+    WHEN dd.finscore IS NULL THEN 'Unknown'
+    WHEN dd.finscore >= 800 THEN 'Excellent (800+)'
+    WHEN dd.finscore >= 740 THEN 'Very Good (740-799)'
+    WHEN dd.finscore >= 670 THEN 'Good (670-739)'
+    WHEN dd.finscore >= 580 THEN 'Fair (580-669)'
+    WHEN dd.finscore < 580 THEN 'Poor (<580)'
+    ELSE 'Unknown'
+  END as finscore_category,
+  
+  -- Metadata
+  dd._source_table,
+  CURRENT_TIMESTAMP() AS _load_timestamp
+FROM silver.finance.dim_driver dd
+WHERE dd.driver_key IS NOT NULL; 

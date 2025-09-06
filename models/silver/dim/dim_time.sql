@@ -1,9 +1,12 @@
 -- models/silver/dim/dim_time.sql
 -- Silver layer time dimension table with time-of-day breakdown
 
-CREATE TABLE IF NOT EXISTS silver.finance.dim_time (
+-- Drop and recreate table to ensure schema consistency
+DROP TABLE IF EXISTS silver.finance.dim_time;
+
+CREATE TABLE silver.finance.dim_time (
   time_key INT NOT NULL, -- HHMMSS format (e.g., 143022 for 14:30:22)
-  time_value TIME, -- Actual time value
+  time_value STRING, -- Actual time value in HH:MM:SS format
   hour_24 SMALLINT, -- 0-23
   hour_12 SMALLINT, -- 1-12
   minute SMALLINT, -- 0-59
@@ -28,8 +31,8 @@ SELECT
   -- Time key in HHMMSS format
   CAST(LPAD(hour_24, 2, '0') || LPAD(minute, 2, '0') || LPAD(second, 2, '0') AS INT) AS time_key,
   
-  -- Time value
-  CAST(LPAD(hour_24, 2, '0') || ':' || LPAD(minute, 2, '0') || ':' || LPAD(second, 2, '0') AS TIME) AS time_value,
+  -- Time value in HH:MM:SS format
+  LPAD(hour_24, 2, '0') || ':' || LPAD(minute, 2, '0') || ':' || LPAD(second, 2, '0') AS time_value,
   
   -- Time components
   hour_24,
@@ -81,7 +84,7 @@ UNION ALL
 -- Add special time records
 SELECT 
   0 AS time_key,
-  CAST('00:00:00' AS TIME) AS time_value,
+  '00:00:00' AS time_value,
   0 AS hour_24,
   12 AS hour_12,
   0 AS minute,

@@ -1,7 +1,10 @@
 -- models/gold/dim/dim_source.sql
 -- Gold layer source dimension with business enhancements
 
-CREATE TABLE IF NOT EXISTS gold.finance.dim_source (
+-- Drop and recreate table to ensure schema consistency
+DROP TABLE IF EXISTS gold.finance.dim_source;
+
+CREATE TABLE gold.finance.dim_source (
   source_key STRING NOT NULL,
   source_name STRING,
   source_category STRING,
@@ -19,97 +22,93 @@ TBLPROPERTIES (
     'delta.autoOptimize.autoCompact' = 'true'
 );
 
--- Merge from silver with business enhancements
-MERGE INTO gold.finance.dim_source AS target
-USING (
-  SELECT
-    ss.source_key,
-    ss.source_name,
-    -- Categorize sources into business groups
-    CASE
-      WHEN UPPER(ss.source_name) LIKE '%GOOGLE%' OR UPPER(ss.source_name) LIKE '%FACEBOOK%' OR UPPER(ss.source_name) LIKE '%SOCIAL%' THEN 'Digital Advertising'
-      WHEN UPPER(ss.source_name) LIKE '%REFERRAL%' OR UPPER(ss.source_name) LIKE '%WORD%' THEN 'Referral'
-      WHEN UPPER(ss.source_name) LIKE '%DIRECT%' OR UPPER(ss.source_name) LIKE '%WEBSITE%' THEN 'Direct'
-      WHEN UPPER(ss.source_name) LIKE '%EMAIL%' OR UPPER(ss.source_name) LIKE '%NEWSLETTER%' THEN 'Email Marketing'
-      WHEN UPPER(ss.source_name) LIKE '%PHONE%' OR UPPER(ss.source_name) LIKE '%CALL%' THEN 'Phone'
-      WHEN ss.source_name = 'Unknown' THEN 'Unknown'
-      ELSE 'Other'
-    END AS source_category,
-    
-    -- Map to marketing channels
-    CASE
-      WHEN UPPER(ss.source_name) LIKE '%GOOGLE%' THEN 'Google Ads'
-      WHEN UPPER(ss.source_name) LIKE '%FACEBOOK%' THEN 'Facebook Ads'
-      WHEN UPPER(ss.source_name) LIKE '%INSTAGRAM%' THEN 'Instagram'
-      WHEN UPPER(ss.source_name) LIKE '%LINKEDIN%' THEN 'LinkedIn'
-      WHEN UPPER(ss.source_name) LIKE '%TWITTER%' THEN 'Twitter'
-      WHEN UPPER(ss.source_name) LIKE '%YOUTUBE%' THEN 'YouTube'
-      WHEN UPPER(ss.source_name) LIKE '%EMAIL%' THEN 'Email'
-      WHEN UPPER(ss.source_name) LIKE '%REFERRAL%' THEN 'Referral'
-      WHEN UPPER(ss.source_name) LIKE '%DIRECT%' THEN 'Direct'
-      WHEN UPPER(ss.source_name) LIKE '%ORGANIC%' THEN 'Organic Search'
-      WHEN UPPER(ss.source_name) LIKE '%PHONE%' THEN 'Phone'
-      ELSE 'Other'
-    END AS marketing_channel,
-    
-    -- Flag digital channels
-    CASE
-      WHEN UPPER(ss.source_name) LIKE '%GOOGLE%' OR UPPER(ss.source_name) LIKE '%FACEBOOK%' OR 
-           UPPER(ss.source_name) LIKE '%SOCIAL%' OR UPPER(ss.source_name) LIKE '%EMAIL%' OR
-           UPPER(ss.source_name) LIKE '%WEBSITE%' OR UPPER(ss.source_name) LIKE '%ONLINE%' THEN TRUE
-      ELSE FALSE
-    END AS is_digital_channel,
-    
-    -- Flag paid channels
-    CASE
-      WHEN UPPER(ss.source_name) LIKE '%ADS%' OR UPPER(ss.source_name) LIKE '%PAID%' OR
-           UPPER(ss.source_name) LIKE '%GOOGLE%' OR UPPER(ss.source_name) LIKE '%FACEBOOK%' THEN TRUE
-      ELSE FALSE
-    END AS is_paid_channel,
-    
-    -- Create display-friendly names
-    CASE
-      WHEN ss.source_key = 'Unknown' THEN 'Unknown Source'
-      ELSE COALESCE(ss.source_name, ss.source_key, 'Unknown')
-    END AS source_display_name,
-    
-    ss._source_table,
-    CURRENT_TIMESTAMP() AS _load_timestamp
-  FROM silver.finance.dim_source ss
-) AS source
-ON target.source_key = source.source_key
-
-WHEN MATCHED THEN
-  UPDATE SET
-    target.source_name = source.source_name,
-    target.source_category = source.source_category,
-    target.marketing_channel = source.marketing_channel,
-    target.is_digital_channel = source.is_digital_channel,
-    target.is_paid_channel = source.is_paid_channel,
-    target.source_display_name = source.source_display_name,
-    target._source_table = source._source_table,
-    target._load_timestamp = source._load_timestamp
-
-WHEN NOT MATCHED THEN
-  INSERT (
-    source_key,
-    source_name,
-    source_category,
-    marketing_channel,
-    is_digital_channel,
-    is_paid_channel,
-    source_display_name,
-    _source_table,
-    _load_timestamp
-  )
-  VALUES (
-    source.source_key,
-    source.source_name,
-    source.source_category,
-    source.marketing_channel,
-    source.is_digital_channel,
-    source.is_paid_channel,
-    source.source_display_name,
-    source._source_table,
-    source._load_timestamp
-  ); 
+-- Insert all data from silver with business enhancements
+INSERT INTO gold.finance.dim_source (
+  source_key,
+  source_name,
+  source_category,
+  marketing_channel,
+  is_digital_channel,
+  is_paid_channel,
+  source_display_name,
+  _source_table,
+  _load_timestamp
+)
+SELECT
+  ss.source_key,
+  ss.source_description AS source_name,  -- Silver has source_description, not source_name
+  
+  -- Categorize sources into business groups based on source_key and description
+  CASE
+    WHEN ss.source_key = 'web' THEN 'Digital'
+    WHEN ss.source_key = 'social' THEN 'Digital Advertising'
+    WHEN ss.source_key = 'email' THEN 'Email Marketing'
+    WHEN ss.source_key = 'sms' THEN 'SMS Marketing'
+    WHEN ss.source_key = 'referral' THEN 'Referral'
+    WHEN ss.source_key = 'repeat' THEN 'Repeat Customer'
+    WHEN ss.source_key IN ('call-in', 'outbound') THEN 'Phone'
+    WHEN ss.source_key = 'd2d' THEN 'Door-to-Door'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%GOOGLE%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%FACEBOOK%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%SOCIAL%' THEN 'Digital Advertising'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%REFERRAL%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%WORD%' THEN 'Referral'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%EMAIL%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%NEWSLETTER%' THEN 'Email Marketing'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%PHONE%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%CALL%' THEN 'Phone'
+    WHEN ss.source_key = 'unknown' THEN 'Unknown'
+    ELSE 'Other'
+  END AS source_category,
+  
+  -- Map to marketing channels
+  CASE
+    WHEN ss.source_key = 'web' THEN 'Website'
+    WHEN ss.source_key = 'social' THEN 'Social Media'
+    WHEN ss.source_key = 'email' THEN 'Email'
+    WHEN ss.source_key = 'sms' THEN 'SMS'
+    WHEN ss.source_key = 'referral' THEN 'Referral'
+    WHEN ss.source_key = 'repeat' THEN 'Repeat Customer'
+    WHEN ss.source_key = 'call-in' THEN 'Inbound Phone'
+    WHEN ss.source_key = 'outbound' THEN 'Outbound Phone'
+    WHEN ss.source_key = 'd2d' THEN 'Door-to-Door'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%GOOGLE%' THEN 'Google Ads'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%FACEBOOK%' THEN 'Facebook Ads'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%INSTAGRAM%' THEN 'Instagram'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%LINKEDIN%' THEN 'LinkedIn'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%TWITTER%' THEN 'Twitter'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%YOUTUBE%' THEN 'YouTube'
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%ORGANIC%' THEN 'Organic Search'
+    ELSE 'Other'
+  END AS marketing_channel,
+  
+  -- Flag digital channels
+  CASE
+    WHEN ss.source_key IN ('web', 'social', 'email', 'sms') THEN TRUE
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%GOOGLE%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%FACEBOOK%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%SOCIAL%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%EMAIL%' OR
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%WEBSITE%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%ONLINE%' THEN TRUE
+    ELSE FALSE
+  END AS is_digital_channel,
+  
+  -- Flag paid channels
+  CASE
+    WHEN UPPER(COALESCE(ss.source_description, '')) LIKE '%ADS%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%PAID%' OR
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%GOOGLE%' OR 
+         UPPER(COALESCE(ss.source_description, '')) LIKE '%FACEBOOK%' THEN TRUE
+    ELSE FALSE
+  END AS is_paid_channel,
+  
+  -- Create display-friendly names
+  CASE
+    WHEN ss.source_key = 'unknown' THEN 'Unknown Source'
+    ELSE COALESCE(ss.source_description, ss.source_key, 'Unknown')
+  END AS source_display_name,
+  
+  ss._source_table,
+  CURRENT_TIMESTAMP() AS _load_timestamp
+FROM silver.finance.dim_source ss; 

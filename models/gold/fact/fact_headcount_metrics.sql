@@ -1,7 +1,10 @@
 -- models/gold/fact/fact_headcount_metrics.sql
 -- Fact table for headcount metrics analysis
 
-CREATE TABLE IF NOT EXISTS gold.finance.fact_headcount_metrics (
+-- Drop and recreate table to ensure schema consistency
+DROP TABLE IF EXISTS gold.finance.fact_headcount_metrics;
+
+CREATE TABLE gold.finance.fact_headcount_metrics (
   date_key INT NOT NULL, -- Date in format YYYYMMDD
   department STRING NOT NULL,
   employment_status STRING NOT NULL,
@@ -33,8 +36,11 @@ INSERT INTO gold.finance.fact_headcount_metrics
 WITH date_range AS (
   SELECT date_key
   FROM gold.finance.dim_date
-  WHERE date BETWEEN 
-    (SELECT MIN(hire_date) FROM gold.finance.dim_employee WHERE hire_date IS NOT NULL) 
+  WHERE date_actual BETWEEN 
+    (SELECT MIN(hd.date_actual) 
+     FROM gold.finance.dim_employee e 
+     JOIN gold.finance.dim_date hd ON e.hire_date_key = hd.date_key 
+     WHERE e.hire_date_key IS NOT NULL) 
     AND CURRENT_DATE()
 ),
 departments AS (
@@ -82,27 +88,27 @@ daily_metrics AS (
     dim.state,
     -- Count active employees on this date
     COUNT(DISTINCT CASE 
-      WHEN e.hire_date <= d.date 
-        AND (e.termination_date IS NULL OR e.termination_date > d.date)
+      WHEN hire_date.date_actual <= d.date_actual 
+        AND (term_date.date_actual IS NULL OR term_date.date_actual > d.date_actual)
       THEN e.employee_key 
     END) AS headcount,
     -- Count new hires on this date
     COUNT(DISTINCT CASE 
-      WHEN e.hire_date = d.date 
+      WHEN hire_date.date_actual = d.date_actual 
       THEN e.employee_key 
     END) AS new_hires,
     -- Count terminations on this date
     COUNT(DISTINCT CASE 
-      WHEN e.termination_date = d.date 
+      WHEN term_date.date_actual = d.date_actual 
       THEN e.employee_key 
     END) AS terminations,
     -- Net change
     COUNT(DISTINCT CASE 
-      WHEN e.hire_date = d.date 
+      WHEN hire_date.date_actual = d.date_actual 
       THEN e.employee_key 
     END) - 
     COUNT(DISTINCT CASE 
-      WHEN e.termination_date = d.date 
+      WHEN term_date.date_actual = d.date_actual 
       THEN e.employee_key 
     END) AS net_change
   FROM dimensions dim
@@ -113,6 +119,8 @@ daily_metrics AS (
     AND (e.job_title = dim.job_title OR (e.job_title IS NULL AND dim.job_title = 'Unknown'))
     AND (e.location = dim.location OR (e.location IS NULL AND dim.location = 'Unknown'))
     AND (e.state = dim.state OR (e.state IS NULL AND dim.state = 'Unknown'))
+  LEFT JOIN gold.finance.dim_date hire_date ON e.hire_date_key = hire_date.date_key
+  LEFT JOIN gold.finance.dim_date term_date ON e.termination_date_key = term_date.date_key
   GROUP BY
     dim.date_key,
     dim.department,
@@ -146,7 +154,7 @@ ytd_metrics AS (
     AND dm2.location = dm.location
     AND dm2.state = dm.state
   JOIN gold.finance.dim_date d2 ON dm2.date_key = d2.date_key
-  WHERE d2.year = d.year AND d2.date <= d.date
+  WHERE d2.year_actual = d.year_actual AND d2.date_actual <= d.date_actual
   GROUP BY
     dm.date_key,
     dm.department,

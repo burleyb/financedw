@@ -346,28 +346,3 @@ WHEN NOT MATCHED THEN
     source._source_table,
     source._load_timestamp
   ); 
-
-
-
-
-CountIf([Monthly Driver Activity → net_amount]
-> 0) - CountIf([Monthly Driver Activity → net_amount] < 0)
-
-SumIf(
-  [Amount Dollars],
-  [Expense Metric Group] = "MARKETING"
-) /
-  CountIf([Is Driver Count] = True)
-
-
-  
-  
-  
-  Sum([Amount Dollars]) /
-  CountIf(
-    (
-      [Account → Account Number] = "4141"
-      OR [Account → Account Number] = "4130"
-    )
-    AND [Is Driver Count] = True
-  )
