@@ -99,6 +99,11 @@ USING (
       0
     ) AS commission_time_key,
 
+    -- Credit Memo Flags
+    CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
+    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
+    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
+
     -- Measures (multiply by 100 and cast to BIGINT, use COALESCE to default nulls to zero)
     CAST(COALESCE(fd.setter_commission, 0) * 100 AS BIGINT) AS setter_commission_amount,
     CAST(
@@ -116,10 +121,7 @@ USING (
     CAST(COALESCE(fd.commissionable_gross_revenue, 0) * 100 AS BIGINT) AS commissionable_gross_revenue_amount,
 
     'bronze.leaseend_db_public.deals JOIN bronze.leaseend_db_public.financial_infos' as _source_table,
-
-    CASE WHEN cmv.vin IS NOT NULL THEN TRUE ELSE FALSE END AS has_credit_memo,
-    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'yyyyMMdd') AS INT), 0) AS credit_memo_date_key,
-    COALESCE(CAST(DATE_FORMAT(cmv.credit_memo_date, 'HHmmss') AS INT), 0) AS credit_memo_time_key,
+    CURRENT_TIMESTAMP() AS _load_timestamp
 
   FROM deal_data dd
   LEFT JOIN financial_data fd ON dd.id = fd.deal_id AND fd.rn = 1
