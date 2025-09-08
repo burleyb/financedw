@@ -1,10 +1,8 @@
 -- models/gold/fact/fact_headcount_metrics.sql
--- Fact table for headcount metrics analysis
+-- Fact table for headcount metrics analysis - INCREMENTAL LOAD
 
--- Drop and recreate table to ensure schema consistency
-DROP TABLE IF EXISTS gold.finance.fact_headcount_metrics;
-
-CREATE TABLE gold.finance.fact_headcount_metrics (
+-- Create table if it doesn't exist
+CREATE TABLE IF NOT EXISTS gold.finance.fact_headcount_metrics (
   date_key INT NOT NULL, -- Date in format YYYYMMDD
   department STRING NOT NULL,
   employment_status STRING NOT NULL,
@@ -31,141 +29,114 @@ TBLPROPERTIES (
   'delta.autoOptimize.autoCompact' = 'true'
 );
 
--- Generate daily headcount metrics
-INSERT INTO gold.finance.fact_headcount_metrics
-WITH date_range AS (
-  SELECT date_key
-  FROM gold.finance.dim_date
-  WHERE date_actual BETWEEN 
-    (SELECT MIN(hd.date_actual) 
-     FROM gold.finance.dim_employee e 
-     JOIN gold.finance.dim_date hd ON e.hire_date_key = hd.date_key 
-     WHERE e.hire_date_key IS NOT NULL) 
-    AND CURRENT_DATE()
+-- Incremental load: only process new/changed dates
+MERGE INTO gold.finance.fact_headcount_metrics AS target
+USING (
+-- Get dates to process - full load on first run, incremental on subsequent runs
+WITH table_exists AS (
+  SELECT COUNT(*) > 0 AS has_data
+  FROM gold.finance.fact_headcount_metrics
+  LIMIT 1
 ),
-departments AS (
-  SELECT DISTINCT COALESCE(department, 'Unknown') AS department
-  FROM gold.finance.dim_employee
+process_dates AS (
+  SELECT DISTINCT d.date_key, d.date_actual, d.year_actual
+  FROM gold.finance.dim_date d
+  CROSS JOIN table_exists te
+  WHERE 
+    CASE 
+      -- First run: load all historical data
+      WHEN NOT te.has_data THEN d.date_actual BETWEEN 
+        (SELECT MIN(hd.date_actual) 
+         FROM gold.finance.dim_employee e 
+         JOIN gold.finance.dim_date hd ON e.hire_date_key = hd.date_key 
+         WHERE e.hire_date_key IS NOT NULL) 
+        AND CURRENT_DATE()
+      -- Subsequent runs: incremental load
+      ELSE d.date_actual >= CURRENT_DATE() - INTERVAL 7 DAYS
+        OR d.date_key IN (
+          -- Include dates with new hires
+          SELECT e.hire_date_key
+          FROM gold.finance.dim_employee e
+          WHERE e.hire_date_key IS NOT NULL
+          UNION
+          -- Include dates with terminations
+          SELECT e.termination_date_key
+          FROM gold.finance.dim_employee e
+          WHERE e.termination_date_key IS NOT NULL
+        )
+    END
 ),
-employment_statuses AS (
-  SELECT DISTINCT COALESCE(employment_status, 'Unknown') AS employment_status
-  FROM gold.finance.dim_employee
-),
-job_titles AS (
-  SELECT DISTINCT COALESCE(job_title, 'Unknown') AS job_title
-  FROM gold.finance.dim_employee
-),
-locations AS (
-  SELECT DISTINCT COALESCE(location, 'Unknown') AS location
-  FROM gold.finance.dim_employee
-),
-states AS (
-  SELECT DISTINCT COALESCE(state, 'Unknown') AS state
-  FROM gold.finance.dim_employee
-),
-dimensions AS (
-  SELECT 
-    d.date_key,
-    dept.department,
-    es.employment_status,
-    jt.job_title,
-    l.location,
-    s.state
-  FROM date_range d
-  CROSS JOIN departments dept
-  CROSS JOIN employment_statuses es
-  CROSS JOIN job_titles jt
-  CROSS JOIN locations l
-  CROSS JOIN states s
-),
-daily_metrics AS (
+-- Build metrics directly from employee data without CROSS JOIN
+employee_daily_metrics AS (
   SELECT
-    dim.date_key,
-    dim.department,
-    dim.employment_status,
-    dim.job_title,
-    dim.location,
-    dim.state,
+    pd.date_key,
+    COALESCE(e.department, 'Unknown') AS department,
+    COALESCE(e.employment_status, 'Unknown') AS employment_status,
+    COALESCE(e.job_title, 'Unknown') AS job_title,
+    COALESCE(e.location, 'Unknown') AS location,
+    COALESCE(e.state, 'Unknown') AS state,
     -- Count active employees on this date
     COUNT(DISTINCT CASE 
-      WHEN hire_date.date_actual <= d.date_actual 
-        AND (term_date.date_actual IS NULL OR term_date.date_actual > d.date_actual)
+      WHEN hire_date.date_actual <= pd.date_actual 
+        AND (term_date.date_actual IS NULL OR term_date.date_actual > pd.date_actual)
       THEN e.employee_key 
     END) AS headcount,
     -- Count new hires on this date
     COUNT(DISTINCT CASE 
-      WHEN hire_date.date_actual = d.date_actual 
+      WHEN hire_date.date_actual = pd.date_actual 
       THEN e.employee_key 
     END) AS new_hires,
     -- Count terminations on this date
     COUNT(DISTINCT CASE 
-      WHEN term_date.date_actual = d.date_actual 
+      WHEN term_date.date_actual = pd.date_actual 
       THEN e.employee_key 
-    END) AS terminations,
-    -- Net change
-    COUNT(DISTINCT CASE 
-      WHEN hire_date.date_actual = d.date_actual 
-      THEN e.employee_key 
-    END) - 
-    COUNT(DISTINCT CASE 
-      WHEN term_date.date_actual = d.date_actual 
-      THEN e.employee_key 
-    END) AS net_change
-  FROM dimensions dim
-  JOIN gold.finance.dim_date d ON dim.date_key = d.date_key
-  LEFT JOIN gold.finance.dim_employee e ON 
-    (e.department = dim.department OR (e.department IS NULL AND dim.department = 'Unknown'))
-    AND (e.employment_status = dim.employment_status OR (e.employment_status IS NULL AND dim.employment_status = 'Unknown'))
-    AND (e.job_title = dim.job_title OR (e.job_title IS NULL AND dim.job_title = 'Unknown'))
-    AND (e.location = dim.location OR (e.location IS NULL AND dim.location = 'Unknown'))
-    AND (e.state = dim.state OR (e.state IS NULL AND dim.state = 'Unknown'))
+    END) AS terminations
+  FROM process_dates pd
+  CROSS JOIN gold.finance.dim_employee e
   LEFT JOIN gold.finance.dim_date hire_date ON e.hire_date_key = hire_date.date_key
   LEFT JOIN gold.finance.dim_date term_date ON e.termination_date_key = term_date.date_key
+  WHERE e.employee_key != 'unknown' -- Exclude unknown records
   GROUP BY
-    dim.date_key,
-    dim.department,
-    dim.employment_status,
-    dim.job_title,
-    dim.location,
-    dim.state
+    pd.date_key,
+    pd.date_actual,
+    pd.year_actual,
+    COALESCE(e.department, 'Unknown'),
+    COALESCE(e.employment_status, 'Unknown'),
+    COALESCE(e.job_title, 'Unknown'),
+    COALESCE(e.location, 'Unknown'),
+    COALESCE(e.state, 'Unknown')
 ),
-ytd_metrics AS (
+-- Calculate YTD metrics efficiently
+final_metrics AS (
   SELECT
-    dm.date_key,
-    dm.department,
-    dm.employment_status,
-    dm.job_title,
-    dm.location,
-    dm.state,
-    dm.headcount,
-    dm.new_hires,
-    dm.terminations,
-    dm.net_change,
-    -- Calculate year-to-date metrics
-    SUM(dm2.new_hires) AS ytd_hires,
-    SUM(dm2.terminations) AS ytd_terminations,
-    SUM(dm2.net_change) AS ytd_net_change
-  FROM daily_metrics dm
-  JOIN gold.finance.dim_date d ON dm.date_key = d.date_key
-  JOIN daily_metrics dm2 ON 
-    dm2.department = dm.department
-    AND dm2.employment_status = dm.employment_status
-    AND dm2.job_title = dm.job_title
-    AND dm2.location = dm.location
-    AND dm2.state = dm.state
-  JOIN gold.finance.dim_date d2 ON dm2.date_key = d2.date_key
-  WHERE d2.year_actual = d.year_actual AND d2.date_actual <= d.date_actual
-  GROUP BY
-    dm.date_key,
-    dm.department,
-    dm.employment_status,
-    dm.job_title,
-    dm.location,
-    dm.state,
-    dm.headcount,
-    dm.new_hires,
-    dm.terminations,
-    dm.net_change
+    edm.date_key,
+    edm.department,
+    edm.employment_status,
+    edm.job_title,
+    edm.location,
+    edm.state,
+    edm.headcount,
+    edm.new_hires,
+    edm.terminations,
+    edm.new_hires - edm.terminations AS net_change,
+    -- YTD calculations using window functions for efficiency
+    SUM(edm.new_hires) OVER (
+      PARTITION BY edm.department, edm.employment_status, edm.job_title, edm.location, edm.state, pd.year_actual 
+      ORDER BY edm.date_key 
+      ROWS UNBOUNDED PRECEDING
+    ) AS ytd_hires,
+    SUM(edm.terminations) OVER (
+      PARTITION BY edm.department, edm.employment_status, edm.job_title, edm.location, edm.state, pd.year_actual 
+      ORDER BY edm.date_key 
+      ROWS UNBOUNDED PRECEDING
+    ) AS ytd_terminations,
+    SUM(edm.new_hires - edm.terminations) OVER (
+      PARTITION BY edm.department, edm.employment_status, edm.job_title, edm.location, edm.state, pd.year_actual 
+      ORDER BY edm.date_key 
+      ROWS UNBOUNDED PRECEDING
+    ) AS ytd_net_change
+  FROM employee_daily_metrics edm
+  JOIN process_dates pd ON edm.date_key = pd.date_key
 )
 SELECT
   date_key,
@@ -182,5 +153,55 @@ SELECT
   ytd_terminations,
   ytd_net_change,
   CURRENT_TIMESTAMP() AS _load_timestamp
-FROM ytd_metrics;
-
+FROM final_metrics
+WHERE headcount > 0 OR new_hires > 0 OR terminations > 0 -- Only include rows with actual data
+) AS source
+ON target.date_key = source.date_key
+  AND target.department = source.department
+  AND target.employment_status = source.employment_status
+  AND target.job_title = source.job_title
+  AND target.location = source.location
+  AND target.state = source.state
+WHEN MATCHED THEN
+  UPDATE SET
+    headcount = source.headcount,
+    new_hires = source.new_hires,
+    terminations = source.terminations,
+    net_change = source.net_change,
+    ytd_hires = source.ytd_hires,
+    ytd_terminations = source.ytd_terminations,
+    ytd_net_change = source.ytd_net_change,
+    _load_timestamp = source._load_timestamp
+WHEN NOT MATCHED THEN
+  INSERT (
+    date_key,
+    department,
+    employment_status,
+    job_title,
+    location,
+    state,
+    headcount,
+    new_hires,
+    terminations,
+    net_change,
+    ytd_hires,
+    ytd_terminations,
+    ytd_net_change,
+    _load_timestamp
+  )
+  VALUES (
+    source.date_key,
+    source.department,
+    source.employment_status,
+    source.job_title,
+    source.location,
+    source.state,
+    source.headcount,
+    source.new_hires,
+    source.terminations,
+    source.net_change,
+    source.ytd_hires,
+    source.ytd_terminations,
+    source.ytd_net_change,
+    source._load_timestamp
+  );
