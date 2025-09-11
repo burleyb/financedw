@@ -261,6 +261,7 @@ USING (
           ('4110C', 'REVENUE', 'VSC', 'COST'),
           ('4111', 'REVENUE', 'VSC', 'CHARGEBACK'),
           ('4115', 'REVENUE', 'VSC', 'REINSURANCE'),
+          ('4116', 'REVENUE', 'VSC', 'REINSURANCE'),
           
           -- 4120 - REV - GAP
           ('4120', 'REVENUE', 'GAP', 'BASE'),
