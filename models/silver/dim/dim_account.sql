@@ -1,5 +1,6 @@
 -- models/silver/dim/dim_account.sql
--- Enhanced Account Dimension with Income Statement Groupings
+-- Enhanced Account Dimension with DYNAMIC Income Statement Groupings
+-- This version automatically classifies accounts based on NetSuite hierarchy and patterns
 
 -- Drop and recreate table to ensure correct schema
 DROP TABLE IF EXISTS silver.finance.dim_account;
@@ -51,421 +52,272 @@ CREATE TABLE IF NOT EXISTS silver.finance.dim_account (
   _load_timestamp TIMESTAMP -- Load timestamp
 )
 USING DELTA
-COMMENT 'Silver layer NetSuite accounts dimension'
+COMMENT 'Silver layer NetSuite accounts dimension with DYNAMIC classification'
 TBLPROPERTIES (
     'delta.autoOptimize.optimizeWrite' = 'true',
     'delta.autoOptimize.autoCompact' = 'true'
 );
 
--- 2. Merge incremental changes
+-- 2. Merge incremental changes with DYNAMIC CLASSIFICATION
 MERGE INTO silver.finance.dim_account AS target
 USING (
-  WITH business_account_overrides AS (
-    -- Business-specific account mappings (same as fact table)
-    SELECT * FROM VALUES
-      -- 4000 SERIES - REVENUE
-      ('4105', 'REVENUE', 'RESERVE', 'BASE'),
-      ('4106', 'REVENUE', 'RESERVE', 'BONUS'),
-      ('4107', 'REVENUE', 'RESERVE', 'CHARGEBACK'),
-      ('4130C', 'REVENUE', 'DOC_FEES', 'CHARGEBACK'),
-
-      -- 4110 - REV - VSC  
-      ('4110', 'REVENUE', 'VSC', 'BASE'),
-      ('4110A', 'REVENUE', 'VSC', 'ADVANCE'),
-      ('4110B', 'REVENUE', 'VSC', 'VOLUME_BONUS'),
-      ('4110C', 'REVENUE', 'VSC', 'COST'),
-      ('4111', 'REVENUE', 'VSC', 'CHARGEBACK'),
-      ('4115', 'REVENUE', 'VSC', 'REINSURANCE'),
-      ('4116', 'REVENUE', 'VSC', 'REINSURANCE'),
-
-      -- 4120 - REV - GAP
-      ('4120', 'REVENUE', 'GAP', 'BASE'),
-      ('4120A', 'REVENUE', 'GAP', 'ADVANCE'),
-      ('4120B', 'REVENUE', 'GAP', 'VOLUME_BONUS'),
-      ('4120C', 'REVENUE', 'GAP', 'COST'),
-      ('4121', 'REVENUE', 'GAP', 'CHARGEBACK'),
-      ('4125', 'REVENUE', 'GAP', 'REINSURANCE'),
-
-      -- 4130 - REV - DOC FEES
-      ('4130', 'REVENUE', 'DOC_FEES', 'BASE'),
-      ('4130C', 'REVENUE', 'DOC_FEES', 'CHARGEBACK'),
-
-      -- 4140 - REV - TITLING FEES
-      ('4141', 'REVENUE', 'TITLING_FEES', 'BASE'),
-      ('4142', 'REVENUE', 'TITLING_FEES', 'BASE'),
-      ('4190', 'REVENUE', 'OTHER_REVENUE', 'BASE'),
-
-      -- 5000 SERIES - COST OF REVENUE
-
-      -- 5300 - DIRECT PEOPLE COST
-      ('5301', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'FUNDING_CLERKS'),
-      ('5304', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'IC_PAYOFF_TEAM'),
-      ('5305', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'OUTBOUND_COMMISSION'),
-      ('5320', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'TITLE_CLERKS'),
-      ('5330', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'EMP_BENEFITS'),
-      ('5340', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'PAYROLL_TAX'),
-
-      -- 5400 - PAYOFF EXPENSE
-      ('5400', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PAYOFF'),
-      ('5401', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'SALES_TAX'),
-      ('5402', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'REGISTRATION'),
-      ('5403', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'CUSTOMER_EXPERIENCE'),
-      ('5404', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PENALTIES'),
-      ('5520', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'BANK_BUYOUT_FEES'),
-      ('5141', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_ONLY_FEES'),
-      ('5530', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_COR'),
-
-      -- 5500 - COR - OTHER
-      ('5199', 'COST_OF_REVENUE', 'OTHER_COR', 'REPO'),
-      ('5510', 'COST_OF_REVENUE', 'OTHER_COR', 'POSTAGE'),
-
-      -- GA_EXPENSE overrides
-      ('7175', 'EXPENSE', 'GA_EXPENSE', 'DEPRECIATION'),
-      ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION'),
-      
-      -- 8000/9000 SERIES - OTHER INCOME/EXPENSE (excluded from EBITDA)
-      ('8000', 'OTHER_EXPENSE', 'INCOME_TAX', 'MISC_TAX'),
-      ('8010', 'OTHER_EXPENSE', 'INCOME_TAX', 'STATE_TAX'),
-      ('8011', 'OTHER_EXPENSE', 'INCOME_TAX', 'FEDERAL_TAX'),
-      ('8012', 'OTHER_EXPENSE', 'INCOME_TAX', 'DEFERRED_FEDERAL'),
-      ('8013', 'OTHER_EXPENSE', 'INCOME_TAX', 'DEFERRED_STATE'),
-      ('8020', 'OTHER_EXPENSE', 'INCOME_TAX', 'REINSURANCE_TAX'),
-      ('9000', 'OTHER_INCOME', 'NON_OPERATING', 'OTHER'),
-      ('9001', 'OTHER_INCOME', 'NON_OPERATING', 'INTEREST'),
-      ('9001D', 'OTHER_INCOME', 'NON_OPERATING', 'DIVIDEND'),
-      ('9002', 'OTHER_EXPENSE', 'NON_OPERATING', 'IMPAIRMENT'),
-      ('9003', 'OTHER_INCOME', 'NON_OPERATING', 'GAIN_LOSS'),
-      ('9005', 'OTHER_INCOME', 'NON_OPERATING', 'RENT'),
-      ('9007', 'OTHER_EXPENSE', 'NON_OPERATING', 'DONATIONS'),
-      ('9008', 'OTHER_EXPENSE', 'NON_OPERATING', 'ONE_TIME'),
-      ('9010', 'OTHER_EXPENSE', 'NON_OPERATING', 'NON_RECURRING')
-    AS t(account_number, transaction_type, transaction_category, transaction_subcategory)
+  WITH 
+  -- Dynamic parent account analysis to understand account hierarchy
+  account_hierarchy AS (
+    SELECT 
+      a.id,
+      a.acctnumber,
+      a.fullname,
+      a.accttype,
+      a.parent,
+      a.accountsearchdisplayname,
+      a.description,
+      a.issummary,
+      a.isinactive,
+      a.inventory,
+      a.subsidiary,
+      a.includechildren,
+      a.eliminate,
+      a.revalue,
+      a.reconcilewithmatching,
+      a.sbankname,
+      a.sbankroutingnumber,
+      a.sspecacct,
+      a.externalid,
+      a.lastmodifieddate,
+      p.acctnumber as parent_account_number,
+      p.fullname as parent_account_name,
+      p.accttype as parent_account_type
+    FROM bronze.ns.account a
+    LEFT JOIN bronze.ns.account p ON a.parent = p.id AND p._fivetran_deleted = FALSE
+    WHERE a._fivetran_deleted = FALSE
   ),
   
-  metric_group_mappings AS (
-    -- Define income statement metric groupings
-    SELECT account_number, metric_type, metric_group FROM VALUES
-      -- Revenue Metric Groups
-      ('4105', 'REVENUE', 'REV_RESERVE'),
-      ('4106', 'REVENUE', 'REV_RESERVE'),
-      ('4107', 'REVENUE', 'REV_RESERVE'),
-      ('4110', 'REVENUE', 'REV_VSC'),
-      ('4110A', 'REVENUE', 'REV_VSC'),
-      ('4110B', 'REVENUE', 'REV_VSC'),
-      ('4110C', 'REVENUE', 'REV_VSC'), -- VSC Cost treated as negative revenue
-      ('4111', 'REVENUE', 'REV_VSC'),
-      ('4115', 'REVENUE', 'REV_VSC'),
-      ('4116', 'REVENUE', 'REV_VSC'),
-      ('4120', 'REVENUE', 'REV_GAP'),
-      ('4120A', 'REVENUE', 'REV_GAP'),
-      ('4120B', 'REVENUE', 'REV_GAP'),
-      ('4120C', 'REVENUE', 'REV_GAP'), -- GAP Cost treated as negative revenue
-      ('4121', 'REVENUE', 'REV_GAP'),
-      ('4125', 'REVENUE', 'REV_GAP'),
-      ('4130', 'REVENUE', 'REV_DOC_FEES'),
-      ('4130C', 'REVENUE', 'REV_DOC_FEES'),
-      ('4141', 'REVENUE', 'REV_TITLING_FEES'),
-      ('4142', 'REVENUE', 'REV_TITLING_FEES'),
-      ('4190', 'REVENUE', 'REV_OTHER'),
+  -- Dynamic classification based on account patterns and hierarchy
+  dynamic_classification AS (
+    SELECT 
+      ah.*,
       
-      -- Cost of Revenue Metric Groups
-      ('5301', 'COST_OF_REVENUE', 'COR_DIRECT_PEOPLE'),
-      ('5304', 'COST_OF_REVENUE', 'COR_DIRECT_PEOPLE'),
-      ('5305', 'COST_OF_REVENUE', 'COR_DIRECT_PEOPLE'),
-      ('5320', 'COST_OF_REVENUE', 'COR_DIRECT_PEOPLE'),
-      ('5330', 'COST_OF_REVENUE', 'COR_DIRECT_PEOPLE'),
-      ('5340', 'COST_OF_REVENUE', 'COR_DIRECT_PEOPLE'),
-      ('5400', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5401', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5402', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5403', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5404', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5520', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5141', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5530', 'COST_OF_REVENUE', 'COR_PAYOFF_EXPENSE'),
-      ('5199', 'COST_OF_REVENUE', 'COR_OTHER'),
-      ('5510', 'COST_OF_REVENUE', 'COR_OTHER'),
+      -- DYNAMIC TRANSACTION TYPE CLASSIFICATION
+      CASE 
+        -- Revenue accounts: 4000 series OR parent is revenue OR account type indicates revenue
+        WHEN ah.acctnumber BETWEEN '4000' AND '4999' THEN 'REVENUE'
+        WHEN ah.parent_account_number BETWEEN '4000' AND '4999' THEN 'REVENUE'
+        WHEN UPPER(ah.accttype) IN ('INCOME', 'REVENUE') THEN 'REVENUE'
+        WHEN UPPER(ah.parent_account_type) IN ('INCOME', 'REVENUE') THEN 'REVENUE'
+        WHEN UPPER(ah.fullname) LIKE '%REVENUE%' OR UPPER(ah.fullname) LIKE '%INCOME%' THEN 'REVENUE'
+        
+        -- Cost of Revenue accounts: 5000 series OR parent is COR OR COGS type
+        WHEN ah.acctnumber BETWEEN '5000' AND '5999' THEN 'COST_OF_REVENUE'
+        WHEN ah.parent_account_number BETWEEN '5000' AND '5999' THEN 'COST_OF_REVENUE'
+        WHEN UPPER(ah.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'COST_OF_REVENUE'
+        WHEN UPPER(ah.parent_account_type) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'COST_OF_REVENUE'
+        WHEN UPPER(ah.fullname) LIKE '%COST OF REVENUE%' OR UPPER(ah.fullname) LIKE '%COGS%' THEN 'COST_OF_REVENUE'
+        
+        -- Operating Expenses: 6000-7999 series OR expense type
+        WHEN ah.acctnumber BETWEEN '6000' AND '7999' THEN 'EXPENSE'
+        WHEN ah.parent_account_number BETWEEN '6000' AND '7999' THEN 'EXPENSE'
+        WHEN UPPER(ah.accttype) = 'EXPENSE' THEN 'EXPENSE'
+        WHEN UPPER(ah.parent_account_type) = 'EXPENSE' THEN 'EXPENSE'
+        
+        -- Other Income: 9000+ series with income type OR other income type
+        WHEN ah.acctnumber >= '9000' AND UPPER(ah.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME', 'OTHINCOME') THEN 'OTHER_INCOME'
+        WHEN ah.parent_account_number >= '9000' AND UPPER(ah.parent_account_type) IN ('INCOME', 'REVENUE', 'OTHERINCOME', 'OTHINCOME') THEN 'OTHER_INCOME'
+        WHEN UPPER(ah.accttype) IN ('OTHERINCOME', 'OTHINCOME') THEN 'OTHER_INCOME'
+        
+        -- Other Expense: 8000-8999 series OR 9000+ with expense type
+        WHEN ah.acctnumber BETWEEN '8000' AND '8999' THEN 'OTHER_EXPENSE'
+        WHEN ah.acctnumber >= '9000' AND UPPER(ah.accttype) IN ('EXPENSE', 'OTHEREXPENSE', 'OTHEXPENSE') THEN 'OTHER_EXPENSE'
+        WHEN ah.parent_account_number BETWEEN '8000' AND '8999' THEN 'OTHER_EXPENSE'
+        WHEN UPPER(ah.accttype) IN ('OTHEREXPENSE', 'OTHEXPENSE') THEN 'OTHER_EXPENSE'
+        
+        -- Balance Sheet accounts
+        WHEN UPPER(ah.accttype) IN ('BANK', 'ACCREC', 'INVENTORY', 'OTHCURRASSET', 'FIXEDASSET', 'ACCUMDEPRECIATION', 'OTHERASSET', 'DEFERREDEXPENSE', 'UNBILLEDRECEIVABLE') THEN 'ASSET'
+        WHEN UPPER(ah.accttype) IN ('ACCTSPAY', 'CREDITCARD', 'OTHCURRLIAB', 'LONGTERMLIAB', 'DEFERREDREVENUE') THEN 'LIABILITY'
+        WHEN UPPER(ah.accttype) IN ('EQUITY', 'RETEARNINGS', 'EQUITY-NOCLOSE', 'EQUITY-CLOSES') THEN 'EQUITY'
+        
+        ELSE 'OTHER'
+      END as dynamic_transaction_type,
       
-      -- Operating Expense Metric Groups
-      ('6000', 'EXPENSE', 'PEOPLE_COST'),
-      ('6010', 'EXPENSE', 'PEOPLE_COST'),
-      ('6011', 'EXPENSE', 'PEOPLE_COST'),
-      ('6013', 'EXPENSE', 'PEOPLE_COST'),
-      ('6030', 'EXPENSE', 'PEOPLE_COST'),
-      ('6040', 'EXPENSE', 'PEOPLE_COST'),
-      ('6041', 'EXPENSE', 'PEOPLE_COST'),
-      ('6100', 'EXPENSE', 'PEOPLE_COST'),
-      ('6101', 'EXPENSE', 'PEOPLE_COST'),
-      ('6110', 'EXPENSE', 'PEOPLE_COST'),
-      ('6200', 'EXPENSE', 'PEOPLE_COST'),
-      ('6510', 'EXPENSE', 'MARKETING'),
-      ('6520', 'EXPENSE', 'MARKETING'),
-      ('6530', 'EXPENSE', 'MARKETING'),
-      ('6540', 'EXPENSE', 'MARKETING'),
-      ('6550', 'EXPENSE', 'MARKETING'),
-      ('6560', 'EXPENSE', 'MARKETING'),
-      ('6570', 'EXPENSE', 'MARKETING'),
-      ('7000', 'EXPENSE', 'GA_EXPENSE'),
-      ('7001', 'EXPENSE', 'GA_EXPENSE'),
-      ('7002', 'EXPENSE', 'GA_EXPENSE'),
-      ('7003', 'EXPENSE', 'GA_EXPENSE'),
-      ('7004', 'EXPENSE', 'GA_EXPENSE'),
-      ('7005', 'EXPENSE', 'GA_EXPENSE'),
-      ('7006', 'EXPENSE', 'GA_EXPENSE'),
-      ('7007', 'EXPENSE', 'GA_EXPENSE'),
-      ('7100', 'EXPENSE', 'GA_EXPENSE'),
-      ('7110', 'EXPENSE', 'GA_EXPENSE'),
-      ('7120', 'EXPENSE', 'GA_EXPENSE'),
-      ('7125', 'EXPENSE', 'GA_EXPENSE'),
-      ('7130', 'EXPENSE', 'GA_EXPENSE'),
-      ('7131', 'EXPENSE', 'GA_EXPENSE'),
-      ('7140', 'EXPENSE', 'GA_EXPENSE'),
-      ('7141', 'EXPENSE', 'GA_EXPENSE'),
-      ('7150', 'EXPENSE', 'GA_EXPENSE'),
-      ('7160', 'EXPENSE', 'GA_EXPENSE'),
-      ('7170', 'EXPENSE', 'GA_EXPENSE'),
-      ('7170A', 'EXPENSE', 'GA_EXPENSE'),
-      ('7171', 'EXPENSE', 'GA_EXPENSE'),
-      ('7172', 'EXPENSE', 'GA_EXPENSE'),
-      ('7174', 'EXPENSE', 'GA_EXPENSE'),
-      ('7175', 'EXPENSE', 'GA_EXPENSE'),
-      ('7176', 'EXPENSE', 'GA_EXPENSE'),
-      ('7180', 'EXPENSE', 'GA_EXPENSE'),
-      ('7190', 'EXPENSE', 'GA_EXPENSE'),
-      ('7192', 'EXPENSE', 'GA_EXPENSE'),
+      -- DYNAMIC TRANSACTION CATEGORY CLASSIFICATION
+      CASE 
+        -- Revenue categories based on account number patterns and names
+        WHEN ah.acctnumber BETWEEN '4100' AND '4109' OR UPPER(ah.fullname) LIKE '%RESERVE%' THEN 'RESERVE'
+        WHEN ah.acctnumber BETWEEN '4110' AND '4119' OR UPPER(ah.fullname) LIKE '%VSC%' OR UPPER(ah.fullname) LIKE '%SERVICE CONTRACT%' THEN 'VSC'
+        WHEN ah.acctnumber BETWEEN '4120' AND '4129' OR UPPER(ah.fullname) LIKE '%GAP%' OR UPPER(ah.fullname) LIKE '%GUARANTEED%' THEN 'GAP'
+        WHEN ah.acctnumber BETWEEN '4130' AND '4139' OR UPPER(ah.fullname) LIKE '%DOC%' OR UPPER(ah.fullname) LIKE '%DOCUMENT%' THEN 'DOC_FEES'
+        WHEN ah.acctnumber BETWEEN '4140' AND '4149' OR UPPER(ah.fullname) LIKE '%TITLING%' OR UPPER(ah.fullname) LIKE '%TITLE%' THEN 'TITLING_FEES'
+        WHEN ah.acctnumber BETWEEN '4000' AND '4999' THEN 'GENERAL_REVENUE'
+        
+        -- Cost of Revenue categories
+        WHEN ah.acctnumber BETWEEN '5300' AND '5399' OR UPPER(ah.fullname) LIKE '%PEOPLE%' OR UPPER(ah.fullname) LIKE '%EMPLOYEE%' OR UPPER(ah.fullname) LIKE '%PAYROLL%' THEN 'DIRECT_PEOPLE_COST'
+        WHEN ah.acctnumber BETWEEN '5400' AND '5499' OR UPPER(ah.fullname) LIKE '%PAYOFF%' OR UPPER(ah.fullname) LIKE '%VARIANCE%' THEN 'PAYOFF_EXPENSE'
+        WHEN ah.acctnumber BETWEEN '5500' AND '5599' OR (ah.acctnumber BETWEEN '5000' AND '5999' AND UPPER(ah.fullname) LIKE '%OTHER%') THEN 'OTHER_COR'
+        WHEN ah.acctnumber BETWEEN '5000' AND '5999' THEN 'COST_OF_GOODS'
+        
+        -- Operating Expense categories
+        WHEN ah.acctnumber BETWEEN '6000' AND '6499' OR UPPER(ah.fullname) LIKE '%SALARY%' OR UPPER(ah.fullname) LIKE '%WAGE%' OR UPPER(ah.fullname) LIKE '%COMMISSION%' THEN 'PEOPLE_COST'
+        WHEN ah.acctnumber BETWEEN '6500' AND '6599' OR UPPER(ah.fullname) LIKE '%MARKETING%' OR UPPER(ah.fullname) LIKE '%ADVERTISING%' THEN 'MARKETING'
+        WHEN ah.acctnumber BETWEEN '7000' AND '7999' OR UPPER(ah.fullname) LIKE '%GENERAL%' OR UPPER(ah.fullname) LIKE '%ADMINISTRATIVE%' THEN 'GA_EXPENSE'
+        
+        -- Tax and Other categories
+        WHEN ah.acctnumber BETWEEN '8000' AND '8099' OR UPPER(ah.fullname) LIKE '%TAX%' THEN 'INCOME_TAX'
+        WHEN ah.acctnumber BETWEEN '9000' AND '9099' AND UPPER(ah.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'INTEREST'
+        WHEN ah.acctnumber BETWEEN '9000' AND '9099' THEN 'NON_OPERATING'
+        
+        -- Balance sheet categories
+        WHEN UPPER(ah.accttype) = 'BANK' OR UPPER(ah.fullname) LIKE '%CASH%' THEN 'CASH'
+        WHEN UPPER(ah.accttype) IN ('ACCREC', 'ACCOUNTSRECEIVABLE') THEN 'RECEIVABLES'
+        WHEN UPPER(ah.accttype) = 'INVENTORY' THEN 'INVENTORY'
+        WHEN UPPER(ah.accttype) IN ('OTHCURRASSET', 'OTHERCURRENTASSET') THEN 'CURRENT_ASSETS'
+        WHEN UPPER(ah.accttype) IN ('FIXEDASSET', 'FIXEDASSETS') THEN 'FIXED_ASSETS'
+        WHEN UPPER(ah.accttype) IN ('ACCTSPAY', 'ACCOUNTSPAYABLE') THEN 'PAYABLES'
+        WHEN UPPER(ah.accttype) = 'CREDITCARD' THEN 'CREDIT_CARD'
+        WHEN UPPER(ah.accttype) IN ('OTHCURRLIAB', 'OTHERCURRENTLIABILITY') THEN 'CURRENT_LIABILITIES'
+        WHEN UPPER(ah.accttype) IN ('LONGTERMLIAB', 'LONGTERMLIABILITY') THEN 'LONG_TERM_DEBT'
+        WHEN UPPER(ah.accttype) IN ('EQUITY', 'RETEARNINGS') THEN 'EQUITY'
+        
+        ELSE 'UNMAPPED'
+      END as dynamic_transaction_category,
       
-      -- Other Income/Expense Metric Groups (excluded from EBITDA)
-      ('8000', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('8010', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('8011', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('8012', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('8013', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('8020', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('9000', 'OTHER_INCOME', 'OTHER_INCOME'),
-      ('9001', 'OTHER_INCOME', 'OTHER_INCOME'),
-      ('9001D', 'OTHER_INCOME', 'OTHER_INCOME'),
-      ('9002', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('9003', 'OTHER_INCOME', 'OTHER_INCOME'),
-      ('9005', 'OTHER_INCOME', 'OTHER_INCOME'),
-      ('9007', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('9008', 'OTHER_EXPENSE', 'OTHER_EXPENSE'),
-      ('9010', 'OTHER_EXPENSE', 'OTHER_EXPENSE')
-    AS t(account_number, metric_type, metric_group)
+      -- DYNAMIC TRANSACTION SUBCATEGORY CLASSIFICATION
+      CASE 
+        WHEN UPPER(ah.fullname) LIKE '%BONUS%' OR UPPER(ah.acctnumber) LIKE '%B' THEN 'BONUS'
+        WHEN UPPER(ah.fullname) LIKE '%ADVANCE%' OR UPPER(ah.acctnumber) LIKE '%A' THEN 'ADVANCE'
+        WHEN UPPER(ah.fullname) LIKE '%CHARGEBACK%' OR UPPER(ah.acctnumber) LIKE '%C' THEN 'CHARGEBACK'
+        WHEN UPPER(ah.fullname) LIKE '%VOLUME%' THEN 'VOLUME_BONUS'
+        WHEN UPPER(ah.fullname) LIKE '%COST%' THEN 'COST'
+        WHEN UPPER(ah.fullname) LIKE '%REINSURANCE%' THEN 'REINSURANCE'
+        WHEN UPPER(ah.fullname) LIKE '%BASE%' OR ah.acctnumber NOT LIKE '%[A-Z]' THEN 'BASE'
+        ELSE 'STANDARD'
+      END as dynamic_transaction_subcategory
+      
+    FROM account_hierarchy ah
   )
   
-  -- Select the latest distinct account data from the bronze NetSuite accounts table
+  -- Select the latest distinct account data with DYNAMIC CLASSIFICATION
   SELECT  
-    CAST(a.id AS STRING) AS account_key, -- Natural Key
-    a.id as account_id,
-    a.acctnumber AS account_number,
-    COALESCE(a.accountsearchdisplayname, a.fullname, 'Unknown Account') AS account_name,
-    a.fullname AS account_full_name,
-    a.accttype AS account_type,
+    CAST(dc.id AS STRING) AS account_key,
+    dc.id as account_id,
+    dc.acctnumber AS account_number,
+    COALESCE(dc.accountsearchdisplayname, dc.fullname, 'Unknown Account') AS account_name,
+    dc.fullname AS account_full_name,
+    dc.accttype AS account_type,
     
     -- Legacy categorization based on NetSuite account type mappings (kept for backward compatibility)
     CASE
-      -- Asset accounts (Balance Sheet)
-      WHEN UPPER(a.accttype) IN ('BANK', 'BANK-BANK') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('ACCREC', 'ACCTSRECEIVABLE', 'ACCOUNTSRECEIVABLE') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('INVENTORY') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('OTHCURRASSET', 'OTHERCURRENTASSET', 'OTHERCURRENTASSETS') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('FIXEDASSET', 'FIXEDASSETS') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('ACCUMDEPRECIATION', 'ACCUMDEPREC') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('OTHERASSET', 'OTHERASSETS') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('DEFERREDEXPENSE', 'DEFEREXPENSE') THEN 'Assets'
-      WHEN UPPER(a.accttype) IN ('UNBILLEDRECEIVABLE', 'UNBILLEDREC') THEN 'Assets'
-      
-      -- Liability accounts (Balance Sheet)
-      WHEN UPPER(a.accttype) IN ('ACCTSPAY', 'ACCOUNTSPAYABLE') THEN 'Liabilities'
-      WHEN UPPER(a.accttype) IN ('CREDITCARD') THEN 'Liabilities'
-      WHEN UPPER(a.accttype) IN ('OTHCURRLIAB', 'OTHERCURRENTLIABILITY', 'OTHERCURRENTLIABILITIES') THEN 'Liabilities'
-      WHEN UPPER(a.accttype) IN ('LONGTERMLIAB', 'LONGTERMLIABILITY', 'LONGTERMLABILITIES') THEN 'Liabilities'
-      WHEN UPPER(a.accttype) IN ('DEFERREDREVENUE', 'DEFERREVENUE') THEN 'Liabilities'
-      
-      -- Equity accounts (Balance Sheet)
-      WHEN UPPER(a.accttype) IN ('EQUITY', 'EQUITY-NOCLOSE', 'EQUITYNOCLOSE') THEN 'Equity'
-      WHEN UPPER(a.accttype) IN ('RETEARNINGS', 'RETAINEDEARNINGS') THEN 'Equity'
-      WHEN UPPER(a.accttype) IN ('EQUITY-CLOSES', 'EQUITYCLOSES') THEN 'Equity'
-      
-      -- Income/Revenue accounts (Income Statement)
-      WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE') THEN 'Revenue'
-      WHEN UPPER(a.accttype) IN ('OTHERINCOME', 'OTHINCOME') THEN 'Revenue'
-      
-      -- Expense accounts (Income Statement)
-      WHEN UPPER(a.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'Expenses'
-      WHEN UPPER(a.accttype) IN ('EXPENSE') THEN 'Expenses'
-      WHEN UPPER(a.accttype) IN ('OTHEREXPENSE', 'OTHEXPENSE') THEN 'Expenses'
-      
-      -- Special account types
-      WHEN UPPER(a.accttype) IN ('STATISTICAL') THEN 'Statistical'
-      
+      WHEN UPPER(dc.accttype) IN ('BANK', 'BANK-BANK') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('ACCREC', 'ACCTSRECEIVABLE', 'ACCOUNTSRECEIVABLE') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('INVENTORY') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('OTHCURRASSET', 'OTHERCURRENTASSET', 'OTHERCURRENTASSETS') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('FIXEDASSET', 'FIXEDASSETS') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('ACCUMDEPRECIATION', 'ACCUMDEPREC') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('OTHERASSET', 'OTHERASSETS') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('DEFERREDEXPENSE', 'DEFEREXPENSE') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('UNBILLEDRECEIVABLE', 'UNBILLEDREC') THEN 'Assets'
+      WHEN UPPER(dc.accttype) IN ('ACCTSPAY', 'ACCOUNTSPAYABLE') THEN 'Liabilities'
+      WHEN UPPER(dc.accttype) IN ('CREDITCARD') THEN 'Liabilities'
+      WHEN UPPER(dc.accttype) IN ('OTHCURRLIAB', 'OTHERCURRENTLIABILITY', 'OTHERCURRENTLIABILITIES') THEN 'Liabilities'
+      WHEN UPPER(dc.accttype) IN ('LONGTERMLIAB', 'LONGTERMLIABILITY', 'LONGTERMLABILITIES') THEN 'Liabilities'
+      WHEN UPPER(dc.accttype) IN ('DEFERREDREVENUE', 'DEFERREVENUE') THEN 'Liabilities'
+      WHEN UPPER(dc.accttype) IN ('EQUITY', 'EQUITY-NOCLOSE', 'EQUITYNOCLOSE') THEN 'Equity'
+      WHEN UPPER(dc.accttype) IN ('RETEARNINGS', 'RETAINEDEARNINGS') THEN 'Equity'
+      WHEN UPPER(dc.accttype) IN ('EQUITY-CLOSES', 'EQUITYCLOSES') THEN 'Equity'
+      WHEN UPPER(dc.accttype) IN ('INCOME', 'REVENUE') THEN 'Revenue'
+      WHEN UPPER(dc.accttype) IN ('OTHERINCOME', 'OTHINCOME') THEN 'Revenue'
+      WHEN UPPER(dc.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'Expenses'
+      WHEN UPPER(dc.accttype) IN ('EXPENSE') THEN 'Expenses'
+      WHEN UPPER(dc.accttype) IN ('OTHEREXPENSE', 'OTHEXPENSE') THEN 'Expenses'
+      WHEN UPPER(dc.accttype) IN ('STATISTICAL') THEN 'Statistical'
       ELSE 'Other'
     END AS account_category,
     
-    -- Enhanced transaction classification
-    COALESCE(
-      bao.transaction_type,
-      CASE 
-        WHEN a.acctnumber BETWEEN '4000' AND '4999' THEN 'REVENUE'
-        WHEN a.acctnumber BETWEEN '5000' AND '5999' THEN 'COST_OF_REVENUE'
-        WHEN a.acctnumber BETWEEN '6000' AND '7999' THEN 'EXPENSE'
-        WHEN a.acctnumber BETWEEN '8000' AND '8999' THEN 
-          CASE 
-            WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'OTHER_INCOME'
-            ELSE 'OTHER_EXPENSE'
-          END
-        WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME', 'OTHINCOME') THEN 'REVENUE'
-        WHEN UPPER(a.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'COST_OF_REVENUE'
-        WHEN UPPER(a.accttype) IN ('EXPENSE', 'OTHEREXPENSE', 'OTHEXPENSE') THEN 'EXPENSE'
-        WHEN UPPER(a.accttype) IN ('BANK', 'ACCREC', 'INVENTORY', 'OTHCURRASSET', 'FIXEDASSET', 'ACCUMDEPRECIATION', 'OTHERASSET') THEN 'ASSET'
-        WHEN UPPER(a.accttype) IN ('ACCTSPAY', 'CREDITCARD', 'OTHCURRLIAB', 'LONGTERMLIAB') THEN 'LIABILITY'
-        WHEN UPPER(a.accttype) IN ('EQUITY', 'RETEARNINGS') THEN 'EQUITY'
-        ELSE 'OTHER'
-      END
-    ) as transaction_type,
+    -- DYNAMIC transaction classification (replaces static mappings)
+    dc.dynamic_transaction_type as transaction_type,
+    dc.dynamic_transaction_category as transaction_category,
+    dc.dynamic_transaction_subcategory as transaction_subcategory,
     
-    COALESCE(
-      bao.transaction_category,
-      CASE 
-        WHEN a.acctnumber BETWEEN '4100' AND '4109' THEN 'RESERVE'
-        WHEN a.acctnumber BETWEEN '4110' AND '4119' THEN 'VSC'
-        WHEN a.acctnumber BETWEEN '4120' AND '4129' THEN 'GAP'
-        WHEN a.acctnumber BETWEEN '4130' AND '4139' THEN 'DOC_FEES'
-        WHEN a.acctnumber BETWEEN '4140' AND '4149' THEN 'TITLING_FEES'
-        WHEN a.acctnumber BETWEEN '4000' AND '4999' THEN 'GENERAL_REVENUE'
-        WHEN a.acctnumber BETWEEN '5300' AND '5399' THEN 'DIRECT_PEOPLE_COST'
-        WHEN a.acctnumber BETWEEN '5400' AND '5499' THEN 'PAYOFF_EXPENSE'
-        WHEN a.acctnumber BETWEEN '5500' AND '5599' THEN 'OTHER_COR'
-        WHEN a.acctnumber BETWEEN '5000' AND '5999' THEN 'COST_OF_GOODS'
-        WHEN a.acctnumber BETWEEN '6000' AND '6499' THEN 'PEOPLE_COST'
-        WHEN a.acctnumber BETWEEN '6500' AND '6599' THEN 'MARKETING'
-        WHEN a.acctnumber BETWEEN '7000' AND '7999' THEN 'GA_EXPENSE'
-        WHEN a.acctnumber BETWEEN '8000' AND '8099' THEN 'INCOME_TAX'
-        WHEN a.acctnumber BETWEEN '9000' AND '9099' AND UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'INTEREST'
-        WHEN a.acctnumber BETWEEN '9000' AND '9099' THEN 'NON_OPERATING'
-        WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE') THEN 'GENERAL_REVENUE'
-        WHEN UPPER(a.accttype) = 'OTHERINCOME' THEN 'OTHER_INCOME'
-        WHEN UPPER(a.accttype) = 'EXPENSE' THEN 'GENERAL_EXPENSE'
-        WHEN UPPER(a.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'COST_OF_GOODS'
-        WHEN UPPER(a.accttype) IN ('OTHEREXPENSE', 'OTHEXPENSE') THEN 'OTHER_EXPENSE'
-        WHEN UPPER(a.accttype) = 'BANK' THEN 'CASH'
-        WHEN UPPER(a.accttype) IN ('ACCREC', 'ACCOUNTSRECEIVABLE') THEN 'RECEIVABLES'
-        WHEN UPPER(a.accttype) = 'INVENTORY' THEN 'INVENTORY'
-        WHEN UPPER(a.accttype) IN ('OTHCURRASSET', 'OTHERCURRENTASSET') THEN 'CURRENT_ASSETS'
-        WHEN UPPER(a.accttype) IN ('FIXEDASSET', 'FIXEDASSETS') THEN 'FIXED_ASSETS'
-        WHEN UPPER(a.accttype) IN ('ACCTSPAY', 'ACCOUNTSPAYABLE') THEN 'PAYABLES'
-        WHEN UPPER(a.accttype) = 'CREDITCARD' THEN 'CREDIT_CARD'
-        WHEN UPPER(a.accttype) IN ('OTHCURRLIAB', 'OTHERCURRENTLIABILITY') THEN 'CURRENT_LIABILITIES'
-        WHEN UPPER(a.accttype) IN ('LONGTERMLIAB', 'LONGTERMLIABILITY') THEN 'LONG_TERM_DEBT'
-        WHEN UPPER(a.accttype) IN ('EQUITY', 'RETEARNINGS') THEN 'EQUITY'
-        ELSE 'UNMAPPED'
-      END
-    ) as transaction_category,
-    
-    COALESCE(
-      bao.transaction_subcategory,
-      'STANDARD'
-    ) as transaction_subcategory,
-    
-    -- Income Statement Metric Groupings
+    -- DYNAMIC Income Statement Metric Groupings based on transaction classification
     CASE 
-      WHEN mgm_rev.metric_group IS NOT NULL THEN mgm_rev.metric_group
+      WHEN dc.dynamic_transaction_type = 'REVENUE' THEN
+        CASE 
+          WHEN dc.dynamic_transaction_category = 'RESERVE' THEN 'REV_RESERVE'
+          WHEN dc.dynamic_transaction_category = 'VSC' THEN 'REV_VSC'
+          WHEN dc.dynamic_transaction_category = 'GAP' THEN 'REV_GAP'
+          WHEN dc.dynamic_transaction_category = 'DOC_FEES' THEN 'REV_DOC_FEES'
+          WHEN dc.dynamic_transaction_category = 'TITLING_FEES' THEN 'REV_TITLING_FEES'
+          ELSE 'REV_OTHER'
+        END
       ELSE NULL
     END as revenue_metric_group,
     
     CASE 
-      WHEN mgm_cor.metric_group IS NOT NULL THEN mgm_cor.metric_group
+      WHEN dc.dynamic_transaction_type = 'COST_OF_REVENUE' THEN
+        CASE 
+          WHEN dc.dynamic_transaction_category = 'DIRECT_PEOPLE_COST' THEN 'COR_DIRECT_PEOPLE'
+          WHEN dc.dynamic_transaction_category = 'PAYOFF_EXPENSE' THEN 'COR_PAYOFF_EXPENSE'
+          WHEN dc.dynamic_transaction_category IN ('OTHER_COR', 'COST_OF_GOODS') THEN 'COR_OTHER'
+          ELSE 'COR_OTHER'
+        END
       ELSE NULL
     END as cost_metric_group,
     
     CASE 
-      WHEN mgm_exp.metric_group IS NOT NULL THEN mgm_exp.metric_group
+      WHEN dc.dynamic_transaction_type = 'EXPENSE' THEN
+        CASE 
+          WHEN dc.dynamic_transaction_category = 'PEOPLE_COST' THEN 'PEOPLE_COST'
+          WHEN dc.dynamic_transaction_category = 'MARKETING' THEN 'MARKETING'
+          WHEN dc.dynamic_transaction_category = 'GA_EXPENSE' THEN 'GA_EXPENSE'
+          ELSE 'OTHER_EXPENSE'
+        END
       ELSE NULL
     END as expense_metric_group,
     
     CASE 
-      WHEN mgm_other.metric_group IS NOT NULL THEN mgm_other.metric_group
+      WHEN dc.dynamic_transaction_type IN ('OTHER_INCOME', 'OTHER_EXPENSE') THEN
+        CASE 
+          WHEN dc.dynamic_transaction_type = 'OTHER_INCOME' THEN 'OTHER_INCOME'
+          WHEN dc.dynamic_transaction_type = 'OTHER_EXPENSE' THEN 'OTHER_EXPENSE'
+          ELSE NULL
+        END
       ELSE NULL
     END as other_metric_group,
     
-    
-    -- High-level P&L boolean flags for easy filtering
-    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4116','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190')) as is_total_revenue,
-    (a.acctnumber IN ('5301','5304','5305','5320','5330','5340','5400','5401','5520','5402','5141','5530','5403','5404','5199','5510')) as is_cost_of_revenue,
-    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4116','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5403','5404','5199','5510')) as is_gross_profit,
-    (a.acctnumber IN ('6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190')) as is_operating_expense,
-    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4116','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190')) as is_net_ordinary_revenue,
-    (a.acctnumber IN ('8000','8010','8011','8012','8013','8020','9000','9001','9001D','9002','9003','9005','9007','9008','9010')) as is_other_income_expense,
-    (a.acctnumber IN ('4105','4106','4107','4110','4110A','4110B','4110C','4111','4115','4116','4120','4120A','4120B','4120C','4121','4125','4130','4130C','4141','4142','4190','5301','5305','5304','5320','5330','5340','5400','5520','5401','5402','5141','5530','5403','5404','5199','5510','6000','6010','6011','6013','6030','6040','6041','6100','6101','6110','6200','6510','6520','6530','6540','6550','6560','6570','7005','7006','7100','7110','7120','7125','7130','7131','7140','7141','7150','7160','7170','7171','7172','7174','7175','7176','7180','7190','8000','9001','9001D','8010','8011','9007','9010')) as is_net_income,
+    -- DYNAMIC High-level P&L boolean flags (based on dynamic classification)
+    (dc.dynamic_transaction_type = 'REVENUE') as is_total_revenue,
+    (dc.dynamic_transaction_type = 'COST_OF_REVENUE') as is_cost_of_revenue,
+    (dc.dynamic_transaction_type IN ('REVENUE', 'COST_OF_REVENUE')) as is_gross_profit,
+    (dc.dynamic_transaction_type = 'EXPENSE') as is_operating_expense,
+    (dc.dynamic_transaction_type IN ('REVENUE', 'COST_OF_REVENUE', 'EXPENSE')) as is_net_ordinary_revenue,
+    (dc.dynamic_transaction_type IN ('OTHER_INCOME', 'OTHER_EXPENSE')) as is_other_income_expense,
+    (dc.dynamic_transaction_type IN ('REVENUE', 'COST_OF_REVENUE', 'EXPENSE', 'OTHER_INCOME', 'OTHER_EXPENSE')) as is_net_income,
     
     CASE 
-      WHEN a.parent IS NOT NULL AND a.parent != 0 THEN CAST(a.parent AS STRING) 
+      WHEN dc.parent IS NOT NULL AND dc.parent != 0 THEN CAST(dc.parent AS STRING) 
       ELSE NULL 
-    END AS parent_account_key, -- Fixed: Handle empty/null parent values safely for BIGINT source field
-    COALESCE(a.issummary = 'T', FALSE) AS is_summary,
-    COALESCE(a.isinactive = 'T', FALSE) AS is_inactive,
-    COALESCE(a.inventory = 'T', FALSE) AS is_inventory,
-    a.description AS description,
-    a.subsidiary AS subsidiary,
-    a.includechildren AS include_children,
-    a.eliminate,
-    a.revalue,
-    a.reconcilewithmatching AS reconcile_with_matching,
-    a.sbankname AS bank_name,
-    a.sbankroutingnumber AS bank_routing_number,
-    a.sspecacct AS special_account,
-    a.externalid AS external_id,
+    END AS parent_account_key,
+    COALESCE(dc.issummary = 'T', FALSE) AS is_summary,
+    COALESCE(dc.isinactive = 'T', FALSE) AS is_inactive,
+    COALESCE(dc.inventory = 'T', FALSE) AS is_inventory,
+    dc.description AS description,
+    dc.subsidiary AS subsidiary,
+    dc.includechildren AS include_children,
+    dc.eliminate,
+    dc.revalue,
+    dc.reconcilewithmatching AS reconcile_with_matching,
+    dc.sbankname AS bank_name,
+    dc.sbankroutingnumber AS bank_routing_number,
+    dc.sspecacct AS special_account,
+    dc.externalid AS external_id,
     'bronze.ns.account' AS _source_table
-  FROM bronze.ns.account a
-  LEFT JOIN business_account_overrides bao ON a.acctnumber = bao.account_number
-  LEFT JOIN metric_group_mappings mgm_rev ON a.acctnumber = mgm_rev.account_number AND mgm_rev.metric_type = 'REVENUE'
-  LEFT JOIN metric_group_mappings mgm_cor ON a.acctnumber = mgm_cor.account_number AND mgm_cor.metric_type = 'COST_OF_REVENUE'
-  LEFT JOIN metric_group_mappings mgm_exp ON a.acctnumber = mgm_exp.account_number AND mgm_exp.metric_type = 'EXPENSE'
-  LEFT JOIN metric_group_mappings mgm_other ON a.acctnumber = mgm_other.account_number AND mgm_other.metric_type IN ('OTHER_INCOME', 'OTHER_EXPENSE')
-  WHERE a.id IS NOT NULL 
-    AND a._fivetran_deleted = FALSE -- Exclude deleted records
-  -- Deduplicate based on ID, taking the most recently updated record
-  QUALIFY ROW_NUMBER() OVER (PARTITION BY a.id ORDER BY a.lastmodifieddate DESC NULLS LAST) = 1
+  FROM dynamic_classification dc
+  WHERE dc.id IS NOT NULL 
+  QUALIFY ROW_NUMBER() OVER (PARTITION BY dc.id ORDER BY dc.lastmodifieddate DESC NULLS LAST) = 1
+
 ) AS source
 ON target.account_key = source.account_key
 
--- Update existing accounts if their data has changed (SCD Type 1)
-WHEN MATCHED AND (
-    target.account_id <> source.account_id OR
-    target.account_number <> source.account_number OR
-    target.account_name <> source.account_name OR
-    target.account_full_name <> source.account_full_name OR
-    target.account_type <> source.account_type OR
-    target.account_category <> source.account_category OR
-    target.transaction_type <> source.transaction_type OR
-    target.transaction_category <> source.transaction_category OR
-    target.transaction_subcategory <> source.transaction_subcategory OR
-    target.revenue_metric_group <> source.revenue_metric_group OR
-    target.cost_metric_group <> source.cost_metric_group OR
-    target.expense_metric_group <> source.expense_metric_group OR
-    target.other_metric_group <> source.other_metric_group OR
-    target.is_total_revenue <> source.is_total_revenue OR
-    target.is_cost_of_revenue <> source.is_cost_of_revenue OR
-    target.is_gross_profit <> source.is_gross_profit OR
-    target.is_operating_expense <> source.is_operating_expense OR
-    target.is_net_ordinary_revenue <> source.is_net_ordinary_revenue OR
-    target.is_other_income_expense <> source.is_other_income_expense OR
-    target.is_net_income <> source.is_net_income OR
-    target.parent_account_key <> source.parent_account_key OR
-    target.is_summary <> source.is_summary OR
-    target.is_inactive <> source.is_inactive OR
-    target.is_inventory <> source.is_inventory OR
-    target.description <> source.description OR
-    target.subsidiary <> source.subsidiary OR
-    target.include_children <> source.include_children OR
-    target.eliminate <> source.eliminate OR
-    target.revalue <> source.revalue OR
-    target.reconcile_with_matching <> source.reconcile_with_matching OR
-    target.bank_name <> source.bank_name OR
-    target.bank_routing_number <> source.bank_routing_number OR
-    target.special_account <> source.special_account OR
-    target.external_id <> source.external_id
-) THEN
+WHEN MATCHED THEN
   UPDATE SET
     target.account_id = source.account_id,
     target.account_number = source.account_number,
@@ -503,169 +355,61 @@ WHEN MATCHED AND (
     target.external_id = source.external_id,
     target._load_timestamp = CURRENT_TIMESTAMP()
 
--- Insert new accounts
 WHEN NOT MATCHED THEN
   INSERT (
-    account_key,
-    account_id,
-    account_number,
-    account_name,
-    account_full_name,
-    account_type,
-    account_category,
-    transaction_type,
-    transaction_category,
-    transaction_subcategory,
-    revenue_metric_group,
-    cost_metric_group,
-    expense_metric_group,
-    other_metric_group,
-    is_total_revenue,
-    is_cost_of_revenue,
-    is_gross_profit,
-    is_operating_expense,
-    is_net_ordinary_revenue,
-    is_other_income_expense,
-    is_net_income,
-    parent_account_key,
-    is_summary,
-    is_inactive,
-    is_inventory,
-    description,
-    subsidiary,
-    include_children,
-    eliminate,
-    revalue,
-    reconcile_with_matching,
-    bank_name,
-    bank_routing_number,
-    special_account,
-    external_id,
-    _source_table,
-    _load_timestamp
+    account_key, account_id, account_number, account_name, account_full_name,
+    account_type, account_category, transaction_type, transaction_category, transaction_subcategory,
+    revenue_metric_group, cost_metric_group, expense_metric_group, other_metric_group,
+    is_total_revenue, is_cost_of_revenue, is_gross_profit, is_operating_expense,
+    is_net_ordinary_revenue, is_other_income_expense, is_net_income,
+    parent_account_key, is_summary, is_inactive, is_inventory, description,
+    subsidiary, include_children, eliminate, revalue, reconcile_with_matching,
+    bank_name, bank_routing_number, special_account, external_id, _source_table, _load_timestamp
   )
   VALUES (
-    source.account_key,
-    source.account_id,
-    source.account_number,
-    source.account_name,
-    source.account_full_name,
-    source.account_type,
-    source.account_category,
-    source.transaction_type,
-    source.transaction_category,
-    source.transaction_subcategory,
-    source.revenue_metric_group,
-    source.cost_metric_group,
-    source.expense_metric_group,
-    source.other_metric_group,
-    source.is_total_revenue,
-    source.is_cost_of_revenue,
-    source.is_gross_profit,
-    source.is_operating_expense,
-    source.is_net_ordinary_revenue,
-    source.is_other_income_expense,
-    source.is_net_income,
-    source.parent_account_key,
-    source.is_summary,
-    source.is_inactive,
-    source.is_inventory,
-    source.description,
-    source.subsidiary,
-    source.include_children,
-    source.eliminate,
-    source.revalue,
-    source.reconcile_with_matching,
-    source.bank_name,
-    source.bank_routing_number,
-    source.special_account,
-    source.external_id,
-    source._source_table,
-    CURRENT_TIMESTAMP()
+    source.account_key, source.account_id, source.account_number, source.account_name, source.account_full_name,
+    source.account_type, source.account_category, source.transaction_type, source.transaction_category, source.transaction_subcategory,
+    source.revenue_metric_group, source.cost_metric_group, source.expense_metric_group, source.other_metric_group,
+    source.is_total_revenue, source.is_cost_of_revenue, source.is_gross_profit, source.is_operating_expense,
+    source.is_net_ordinary_revenue, source.is_other_income_expense, source.is_net_income,
+    source.parent_account_key, source.is_summary, source.is_inactive, source.is_inventory, source.description,
+    source.subsidiary, source.include_children, source.eliminate, source.revalue, source.reconcile_with_matching,
+    source.bank_name, source.bank_routing_number, source.special_account, source.external_id, source._source_table, CURRENT_TIMESTAMP()
   );
 
--- Ensure 'No Account' and 'Unknown' types exist for handling NULLs
+-- Ensure 'No Account' exists for handling NULLs
 MERGE INTO silver.finance.dim_account AS target
 USING (
-  SELECT '0' as account_key, 0 as account_id, NULL as account_number, 'No Account' as account_name, 'No Account' as account_full_name, 'Other' as account_type, 'Other' as account_category, 'OTHER' as transaction_type, 'UNMAPPED' as transaction_category, 'STANDARD' as transaction_subcategory, NULL as revenue_metric_group, NULL as cost_metric_group, NULL as expense_metric_group, NULL as other_metric_group, false as is_total_revenue, false as is_cost_of_revenue, false as is_gross_profit, false as is_operating_expense, false as is_net_ordinary_revenue, false as is_other_income_expense, false as is_net_income, NULL as parent_account_key, false as is_summary, false as is_inactive, false as is_inventory, 'Default account for null values' as description, NULL as subsidiary, NULL as include_children, NULL as eliminate, NULL as revalue, NULL as reconcile_with_matching, NULL as bank_name, NULL as bank_routing_number, NULL as special_account, NULL as external_id, 'static' as _source_table
+  SELECT '0' as account_key, 0 as account_id, NULL as account_number, 'No Account' as account_name, 
+         'No Account' as account_full_name, 'Other' as account_type, 'Other' as account_category, 
+         'OTHER' as transaction_type, 'UNMAPPED' as transaction_category, 'STANDARD' as transaction_subcategory, 
+         NULL as revenue_metric_group, NULL as cost_metric_group, NULL as expense_metric_group, NULL as other_metric_group, 
+         false as is_total_revenue, false as is_cost_of_revenue, false as is_gross_profit, false as is_operating_expense, 
+         false as is_net_ordinary_revenue, false as is_other_income_expense, false as is_net_income, 
+         NULL as parent_account_key, false as is_summary, false as is_inactive, false as is_inventory, 
+         'Default account for null values' as description, NULL as subsidiary, NULL as include_children, 
+         NULL as eliminate, NULL as revalue, NULL as reconcile_with_matching, NULL as bank_name, 
+         NULL as bank_routing_number, NULL as special_account, NULL as external_id, 'static' as _source_table
 ) AS source
 ON target.account_key = source.account_key
 WHEN NOT MATCHED THEN 
   INSERT (
-    account_key, 
-    account_id,
-    account_number,
-    account_name, 
-    account_full_name,
-    account_type,
-    account_category,
-    transaction_type,
-    transaction_category,
-    transaction_subcategory,
-    revenue_metric_group,
-    cost_metric_group,
-    expense_metric_group,
-    other_metric_group,
-    is_total_revenue,
-    is_cost_of_revenue,
-    is_gross_profit,
-    is_operating_expense,
-    is_net_ordinary_revenue,
-    is_other_income_expense,
-    is_net_income,
-    parent_account_key,
-    is_summary,
-    is_inactive,
-    is_inventory,
-    description,
-    subsidiary,
-    include_children,
-    eliminate,
-    revalue,
-    reconcile_with_matching,
-    bank_name,
-    bank_routing_number,
-    special_account,
-    external_id,
-    _source_table, 
-    _load_timestamp
+    account_key, account_id, account_number, account_name, account_full_name,
+    account_type, account_category, transaction_type, transaction_category, transaction_subcategory,
+    revenue_metric_group, cost_metric_group, expense_metric_group, other_metric_group,
+    is_total_revenue, is_cost_of_revenue, is_gross_profit, is_operating_expense,
+    is_net_ordinary_revenue, is_other_income_expense, is_net_income,
+    parent_account_key, is_summary, is_inactive, is_inventory, description,
+    subsidiary, include_children, eliminate, revalue, reconcile_with_matching,
+    bank_name, bank_routing_number, special_account, external_id, _source_table, _load_timestamp
   )
   VALUES (
-    source.account_key, 
-    source.account_id,
-    source.account_number,
-    source.account_name, 
-    source.account_full_name,
-    source.account_type,
-    source.account_category,
-    source.transaction_type,
-    source.transaction_category,
-    source.transaction_subcategory,
-    source.revenue_metric_group,
-    source.cost_metric_group,
-    source.expense_metric_group,
-    source.other_metric_group,
-    source.is_total_revenue,
-    source.is_cost_of_revenue,
-    source.is_gross_profit,
-    source.is_operating_expense,
-    source.is_net_ordinary_revenue,
-    source.is_other_income_expense,
-    source.is_net_income,
-    source.parent_account_key,
-    source.is_summary,
-    source.is_inactive,
-    source.is_inventory,
-    source.description,
-    source.subsidiary,
-    source.include_children,
-    source.eliminate,
-    source.revalue,
-    source.reconcile_with_matching,
-    source.bank_name,
-    source.bank_routing_number,
-    source.special_account,
-    source.external_id,
-    source._source_table, 
-    CURRENT_TIMESTAMP()
-  ); 
+    source.account_key, source.account_id, source.account_number, source.account_name, source.account_full_name,
+    source.account_type, source.account_category, source.transaction_type, source.transaction_category, source.transaction_subcategory,
+    source.revenue_metric_group, source.cost_metric_group, source.expense_metric_group, source.other_metric_group,
+    source.is_total_revenue, source.is_cost_of_revenue, source.is_gross_profit, source.is_operating_expense,
+    source.is_net_ordinary_revenue, source.is_other_income_expense, source.is_net_income,
+    source.parent_account_key, source.is_summary, source.is_inactive, source.is_inventory, source.description,
+    source.subsidiary, source.include_children, source.eliminate, source.revalue, source.reconcile_with_matching,
+    source.bank_name, source.bank_routing_number, source.special_account, source.external_id, source._source_table, CURRENT_TIMESTAMP()
+  );

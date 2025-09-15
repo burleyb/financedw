@@ -214,7 +214,7 @@ USING (
   ),
 
   -- Comprehensive account mapping that captures ALL NetSuite accounts with transactions
-  -- Combines explicit business mappings with automated classification based on NetSuite account types
+  -- NOTE: This maintains embedded classification for silver layer, but gold layer uses dynamic dim_account for final classification
   account_mappings AS (
     WITH all_transactional_accounts AS (
       -- Find ALL accounts that have transactions (this is the complete universe)
@@ -238,80 +238,26 @@ USING (
         AND account != 0
     ),
     
-    business_account_overrides AS (
-      -- Map accounts by account number (not internal ID) for better maintainability
-      -- Based on Income Statement structure provided by user
+    -- DYNAMIC: Use the dynamic dimension table for account classification (no more hardcoded mappings!)
+    dynamic_account_classifications AS (
       SELECT 
-        a.id as account_id,
-        bo.transaction_type,
-        bo.transaction_category, 
-        bo.transaction_subcategory
-      FROM bronze.ns.account a
-      INNER JOIN (
-        SELECT * FROM VALUES
-          -- 4000 SERIES - REVENUE
-          ('4105', 'REVENUE', 'RESERVE', 'BASE'),
-          ('4106', 'REVENUE', 'RESERVE', 'BONUS'),
-          ('4107', 'REVENUE', 'RESERVE', 'CHARGEBACK'),
-          
-          -- 4110 - REV - VSC  
-          ('4110', 'REVENUE', 'VSC', 'BASE'),
-          ('4110A', 'REVENUE', 'VSC', 'ADVANCE'),
-          ('4110B', 'REVENUE', 'VSC', 'VOLUME_BONUS'),
-          ('4110C', 'REVENUE', 'VSC', 'COST'),
-          ('4111', 'REVENUE', 'VSC', 'CHARGEBACK'),
-          ('4115', 'REVENUE', 'VSC', 'REINSURANCE'),
-          ('4116', 'REVENUE', 'VSC', 'REINSURANCE'),
-          
-          -- 4120 - REV - GAP
-          ('4120', 'REVENUE', 'GAP', 'BASE'),
-          ('4120A', 'REVENUE', 'GAP', 'ADVANCE'),
-          ('4120B', 'REVENUE', 'GAP', 'VOLUME_BONUS'),
-          ('4120C', 'REVENUE', 'GAP', 'COST'),
-          ('4121', 'REVENUE', 'GAP', 'CHARGEBACK'),
-          ('4125', 'REVENUE', 'GAP', 'REINSURANCE'),
-          
-          -- 4130 - REV - DOC FEES
-          ('4130', 'REVENUE', 'DOC_FEES', 'BASE'),
-          ('4130C', 'REVENUE', 'DOC_FEES', 'CHARGEBACK'),
-          
-          -- 4140 - REV - TITLING FEES
-          ('4141', 'REVENUE', 'TITLING_FEES', 'BASE'),
-          ('4142', 'REVENUE', 'TITLING_FEES', 'BASE'),
-          ('4190', 'REVENUE', 'OTHER_REVENUE', 'BASE'),
-          
-          -- 5000 SERIES - COST OF REVENUE
-          
-          -- 5300 - DIRECT PEOPLE COST
-          ('5301', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'FUNDING_CLERKS'),
-          ('5304', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'IC_PAYOFF_TEAM'),
-          ('5305', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'OUTBOUND_COMMISSION'),
-          ('5320', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'TITLE_CLERKS'),
-          ('5330', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'EMP_BENEFITS'),
-          ('5340', 'COST_OF_REVENUE', 'DIRECT_PEOPLE_COST', 'PAYROLL_TAX'),
-          
-          -- 5400 - PAYOFF EXPENSE
-          ('5400', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PAYOFF'),
-          ('5401', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'SALES_TAX'),
-          ('5402', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'REGISTRATION'),
-          ('5403', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'CUSTOMER_EXPERIENCE'),
-          ('5404', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'PENALTIES'),
-          ('5520', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'BANK_BUYOUT_FEES'),
-          ('5141', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_ONLY_FEES'),
-          ('5530', 'COST_OF_REVENUE', 'PAYOFF_EXPENSE', 'TITLE_COR'),
-          
-          -- 5500 - COR - OTHER
-          ('5199', 'COST_OF_REVENUE', 'OTHER_COR', 'REPO'),
-          ('5510', 'COST_OF_REVENUE', 'OTHER_COR', 'POSTAGE'),
-
-          -- GA_EXPENSE overrides for Depreciation & Amortization
-          ('7175', 'EXPENSE', 'GA_EXPENSE', 'DEPRECIATION'),
-          ('7176', 'EXPENSE', 'GA_EXPENSE', 'AMORTIZATION')
-          
-        AS t(account_number, transaction_type, transaction_category, transaction_subcategory)
-      ) bo ON a.acctnumber = bo.account_number
-      WHERE a._fivetran_deleted = FALSE
-        AND (a.isinactive != 'T' OR a.isinactive IS NULL)
+        CAST(da.account_id AS BIGINT) as account_id,
+        da.transaction_type,
+        da.transaction_category, 
+        da.transaction_subcategory
+      FROM silver.finance.dim_account da
+      WHERE da.account_id IS NOT NULL
+    ),
+    
+    -- Temporary CTE to maintain structure while we transition
+    business_account_overrides AS (
+      SELECT 
+        account_id,
+        transaction_type,
+        transaction_category, 
+        transaction_subcategory
+      FROM dynamic_account_classifications
+      -- Note: This replaces the 100+ hardcoded VALUES with dynamic lookup
     )
     
     -- Include ALL transactional accounts with appropriate classification
@@ -320,82 +266,10 @@ USING (
       a.acctnumber as account_number, -- Add account number for easier filtering
       -- Flag for accounts handled by DIRECT method
       CASE WHEN dma.account_number IS NOT NULL THEN TRUE ELSE FALSE END as is_direct_method_account,
-      -- Use business override if exists, otherwise auto-classify based on account number ranges AND NetSuite account type
-      COALESCE(
-        bao.transaction_type,
-        CASE 
-          -- Income Statement account number classification (matches your income statement structure)
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 THEN 'REVENUE'                    -- 4000 series = Revenue
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5000 AND 5999 THEN 'COST_OF_REVENUE'           -- 5000 series = Cost of Revenue
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 6000 AND 7999 THEN 'EXPENSE'                   -- 6000-7000 series = Operating Expenses
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 8000 AND 8999 THEN 'EXPENSE'                   -- 8000 series = Tax Expenses (treat as regular expenses)
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 9000 AND 9999 THEN 
-            CASE 
-              WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'OTHER_INCOME'  -- 9000 series income
-              ELSE 'OTHER_EXPENSE'                                                                 -- 9000 series expense
-            END
-          -- Fallback to NetSuite account type for accounts outside standard ranges
-          WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME', 'OTHINCOME') THEN 'REVENUE'
-          WHEN UPPER(a.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'COST_OF_REVENUE'
-          WHEN UPPER(a.accttype) IN ('EXPENSE', 'OTHEREXPENSE', 'OTHEXPENSE') THEN 'EXPENSE'
-          WHEN UPPER(a.accttype) IN ('BANK', 'ACCREC', 'INVENTORY', 'OTHCURRASSET', 'FIXEDASSET', 'ACCUMDEPRECIATION', 'OTHERASSET') THEN 'ASSET'
-          WHEN UPPER(a.accttype) IN ('ACCTSPAY', 'CREDITCARD', 'OTHCURRLIAB', 'LONGTERMLIAB') THEN 'LIABILITY'
-          WHEN UPPER(a.accttype) IN ('EQUITY', 'RETEARNINGS') THEN 'EQUITY'
-          ELSE 'OTHER'
-        END
-      ) as transaction_type,
-      -- Use business category if exists, otherwise auto-assign based on account number ranges
-      COALESCE(
-        bao.transaction_category,
-        CASE 
-          -- 4000 series revenue subcategorization
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4100 AND 4109 THEN 'RESERVE'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4110 AND 4119 THEN 'VSC'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4120 AND 4129 THEN 'GAP'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4130 AND 4139 THEN 'DOC_FEES'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4140 AND 4149 THEN 'TITLING_FEES'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 4000 AND 4999 THEN 'GENERAL_REVENUE'
-          
-          -- 5000 series cost of revenue subcategorization
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5300 AND 5399 THEN 'DIRECT_PEOPLE_COST'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5400 AND 5499 THEN 'PAYOFF_EXPENSE'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5500 AND 5599 THEN 'OTHER_COR'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 5000 AND 5999 THEN 'COST_OF_GOODS'
-          
-          -- 6000-7000 series expense subcategorization
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 6000 AND 6499 THEN 'PEOPLE_COST'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 6500 AND 6599 THEN 'MARKETING'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 7000 AND 7999 THEN 'GA_EXPENSE'
-          
-          -- 8000-9000 series other income/expense
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 8000 AND 8099 THEN 'INCOME_TAX'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 9000 AND 9099 AND UPPER(a.accttype) IN ('INCOME', 'REVENUE', 'OTHERINCOME') THEN 'INTEREST'
-          WHEN CAST(REGEXP_EXTRACT(a.acctnumber, '^[0-9]+', 0) AS INT) BETWEEN 9000 AND 9099 THEN 'NON_OPERATING'
-          
-          -- Fallback to NetSuite account type classification
-          WHEN UPPER(a.accttype) IN ('INCOME', 'REVENUE') THEN 'GENERAL_REVENUE'
-          WHEN UPPER(a.accttype) = 'OTHERINCOME' THEN 'OTHER_INCOME'
-          WHEN UPPER(a.accttype) = 'EXPENSE' THEN 'GENERAL_EXPENSE'
-          WHEN UPPER(a.accttype) IN ('COGS', 'COSTOFGOODSSOLD') THEN 'COST_OF_GOODS'
-          WHEN UPPER(a.accttype) IN ('OTHEREXPENSE', 'OTHEXPENSE') THEN 'OTHER_EXPENSE'
-          WHEN UPPER(a.accttype) = 'BANK' THEN 'CASH'
-          WHEN UPPER(a.accttype) IN ('ACCREC', 'ACCOUNTSRECEIVABLE') THEN 'RECEIVABLES'
-          WHEN UPPER(a.accttype) = 'INVENTORY' THEN 'INVENTORY'
-          WHEN UPPER(a.accttype) IN ('OTHCURRASSET', 'OTHERCURRENTASSET') THEN 'CURRENT_ASSETS'
-          WHEN UPPER(a.accttype) IN ('FIXEDASSET', 'FIXEDASSETS') THEN 'FIXED_ASSETS'
-          WHEN UPPER(a.accttype) IN ('ACCTSPAY', 'ACCOUNTSPAYABLE') THEN 'PAYABLES'
-          WHEN UPPER(a.accttype) = 'CREDITCARD' THEN 'CREDIT_CARD'
-          WHEN UPPER(a.accttype) IN ('OTHCURRLIAB', 'OTHERCURRENTLIABILITY') THEN 'CURRENT_LIABILITIES'
-          WHEN UPPER(a.accttype) IN ('LONGTERMLIAB', 'LONGTERMLIABILITY') THEN 'LONG_TERM_DEBT'
-          WHEN UPPER(a.accttype) IN ('EQUITY', 'RETEARNINGS') THEN 'EQUITY'
-          ELSE 'UNMAPPED'
-        END
-      ) as transaction_category,
-      -- Use business subcategory if exists, otherwise use standard
-      COALESCE(
-        bao.transaction_subcategory,
-        'STANDARD'
-      ) as transaction_subcategory
+      -- DYNAMIC: Use classification from dynamic dimension (no more fallback logic needed!)
+      COALESCE(bao.transaction_type, 'OTHER') as transaction_type,
+      COALESCE(bao.transaction_category, 'UNMAPPED') as transaction_category,
+      COALESCE(bao.transaction_subcategory, 'STANDARD') as transaction_subcategory
     FROM all_transactional_accounts ata
     INNER JOIN bronze.ns.account a ON ata.account_id = a.id
     LEFT JOIN business_account_overrides bao ON ata.account_id = bao.account_id
